@@ -29,7 +29,7 @@ RUN npm ci --no-audit --no-fund \
          rm -rf "$tree/node_modules/@types/node" 2>/dev/null; \
          find "$tree" -type f \( -name '*.js.map' -o -name '*.mjs.map' -o -name '*.cjs.map' -o -name '*.css.map' \) -delete 2>/dev/null; \
          rm -f "$tree/node_modules/node-pty/build/Makefile" "$tree/node_modules/node-pty/build/config.gypi" 2>/dev/null; \
-         find "$tree/node_modules/@space" -maxdepth 1 -type l 2>/dev/null | while read -r sl; do grep -qx "$(basename "$sl")" "$tree/workspaces.txt" 2>/dev/null || rm -f "$sl"; done; \
+         find "$tree/node_modules/@space" -maxdepth 1 -type l 2>/dev/null | while read -r sl; do [ -e "$sl" ] || rm -f "$sl"; done; \
          rm -f "$tree/workspaces.txt" "$tree/install-workspaces.txt" "$tree/excludes.txt" 2>/dev/null; \
          case "$TARGETARCH" in \
            amd64) find "$tree/node_modules" -type d -name '*linux-arm64*' -prune -exec rm -rf {} + 2>/dev/null ;; \

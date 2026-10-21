@@ -163,6 +163,7 @@ export function verifyStaged({ root, target }) {
   for (const keep of plan.keeps) {
     if (keep === 'agent-skills' && !existsSync(join(root, 'agent-skills'))) problems.push('keep missing: agent-skills');
     if (keep === 'apps/web' && !existsSync(join(root, 'apps/web/dist'))) problems.push('keep missing: apps/web dist');
+    if (keep !== 'agent-skills' && keep !== 'apps/web' && !existsSync(join(root, 'node_modules', keep))) problems.push(`keep missing: node_modules/${keep}`);
   }
   if (problems.length) throw new Error(`staged ${target} verification failed:\n  ${problems.join('\n  ')}`);
   return { target, ok: true };
@@ -176,7 +177,7 @@ if (invokedDirectly) {
   };
   const target = arg('--target');
   const repoRoot = arg('--repo-root') ?? process.cwd();
-  const mode = arg('--verify');
+  const mode = process.argv.includes('--verify');
   if (mode) {
     const root = arg('--repo-root') ?? process.cwd();
     verifyStaged({ root, target });
