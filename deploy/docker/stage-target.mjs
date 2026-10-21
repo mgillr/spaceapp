@@ -18,11 +18,12 @@ const TARGETS = {
     workspaces: [
       'apps/api', 'apps/worker', 'apps/web',
       'packages/cli-host', 'packages/db',
+      'packages/runtime', 'packages/streaming',
     ],
     // apps/web is staged dist-only: its 22 client packages (react, codemirror,
     // xterm...) are bundled by vite and never run in the server. Installing them
     // would blow the 850 MiB core budget for nothing.
-    installWorkspaces: ['apps/api', 'apps/worker', 'packages/cli-host', 'packages/db'],
+    installWorkspaces: ['apps/api', 'apps/worker', 'packages/cli-host', 'packages/db', 'packages/runtime', 'packages/streaming'],
     excludes: [],
     keeps: ['node-pty', '@space/cli-host', '@temporalio', 'agent-skills'],
     files: [
@@ -69,6 +70,8 @@ const TARGETS = {
 const WORKSPACE_PAYLOAD = {
   'apps/api': [['dist', 'dist', true], ['public', 'public', false]],
   'apps/worker': [['dist', 'dist', true]],
+  'packages/runtime': [['dist', 'dist', true]],
+  'packages/streaming': [['dist', 'dist', true]],
   'apps/web': [['dist', 'dist', true], ['public', 'public', false], ['server.mjs', 'server.mjs', true]],
   'packages/cli-host': [['dist', 'dist', true]],
   'packages/db': [['dist', 'dist', true], ['migrations', 'migrations', true]],
