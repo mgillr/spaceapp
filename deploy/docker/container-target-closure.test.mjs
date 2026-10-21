@@ -4,7 +4,7 @@
 // runtime, and the Dockerfile keeps every protected value.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync, rmSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { readFileSync, existsSync, rmSync, mkdirSync, mkdtempSync, readdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -36,14 +36,19 @@ test('cli plan: only the cli-host workspace, every foreign package excluded', ()
 
 test('browser plan: api browser-host closure without cli-host, node-pty or temporal', () => {
   const plan = target('browser');
-  assert.deepEqual(plan.workspaces, ['apps/api']);
+  assert.ok(plan.workspaces.includes('apps/api'), 'browser runs apps/api (browser-host-main.js)');
+  // browser-host-main imports these four, and runtime imports memory-graph
+  for (const ws of ['packages/browser-host', 'packages/contracts', 'packages/db', 'packages/runtime', 'packages/memory-graph']) {
+    assert.ok(plan.workspaces.includes(ws), `browser stages ${ws}`);
+  }
   for (const foreign of [
     '@space/cli-host', 'node-pty', 'packages/cli-host',
-    '@temporalio', 'apps/worker', 'packages/db',
+    '@temporalio', 'apps/worker',
   ]) {
     assert.ok(plan.excludes.includes(foreign), `browser plan must exclude ${foreign}`);
   }
   assert.ok(!plan.workspaces.includes('apps/web'), 'browser carries no web tree at all');
+  assert.ok(!plan.workspaces.includes('apps/worker') && !plan.workspaces.includes('packages/cli-host'), 'browser stages neither the worker nor cli-host');
 });
 
 test('core plan: api, worker, web, db and the startup-required cli-host stay', () => {
@@ -51,9 +56,15 @@ test('core plan: api, worker, web, db and the startup-required cli-host stay', (
   for (const ws of ['apps/api', 'apps/worker', 'apps/web', 'packages/cli-host', 'packages/db']) {
     assert.ok(plan.workspaces.includes(ws), `core keeps ${ws}`);
   }
+  // every workspace api and worker import, so that no @space link points at an empty directory
+  const imported = [
+    'packages/browser-host', 'packages/codex-app-server', 'packages/contracts', 'packages/gateway',
+    'packages/memory-graph', 'packages/opencode-control', 'packages/runtime', 'packages/streaming',
+  ];
+  for (const ws of imported) assert.ok(plan.workspaces.includes(ws), `core stages ${ws}`);
   // apps/web is dist-only in the install list: its 22 client packages never run server-side.
   assert.ok(!plan.installWorkspaces.includes('apps/web'), 'core must not install apps/web client deps');
-  for (const ws of ['apps/api', 'apps/worker', 'packages/cli-host', 'packages/db']) {
+  for (const ws of ['apps/api', 'apps/worker', 'packages/cli-host', 'packages/db', ...imported]) {
     assert.ok(plan.installWorkspaces.includes(ws), `core installs ${ws}`);
   }
   assert.ok(plan.keeps.includes('node-pty'), 'core keeps node-pty (api loads it at startup)');
@@ -131,3 +142,128 @@ test('Dockerfile keeps every protected value while the closures land', () => {
     assert.ok(df.includes(entry), `entrypoint kept: ${entry}`);
   }
 });
+
+// The plans against the sources. The images at 2e312b4 shipped a core API that could not
+// resolve @space/contracts, gateway or memory-graph and a browser host that could not
+// resolve browser-host, contracts, db or runtime: the tables above named too few
+// workspaces, and nothing held them to the code. These two tests read the real
+// repository, not the fixture: every workspace an image's entrypoints reach through
+// value imports is staged, and every staged workspace's own workspace dependencies are
+// staged too (or excluded on purpose), so no link npm makes can point at an empty
+// directory.
+
+// The files each image runs, as its entrypoint names them; a changed entrypoint fails here.
+const ENTRYPOINTS = {
+  core: {
+    scripts: ['deploy/docker/core-entrypoint.sh', 'deploy/docker/core-supervisor.mjs'],
+    entries: ['packages/db/dist/migrate.js', 'deploy/docker/core-supervisor.mjs', 'apps/api/dist/server.js', 'apps/worker/dist/worker.js', 'apps/web/server.mjs'],
+  },
+  browser: {
+    scripts: ['deploy/docker/browser-entrypoint.sh'],
+    entries: ['apps/api/dist/browser-host-main.js'],
+  },
+  cli: {
+    scripts: ['deploy/docker/cli-entrypoint.sh'],
+    entries: ['packages/cli-host/dist/main.js', 'deploy/docker/credential-agent.mjs'],
+  },
+};
+
+// name -> workspace path, and each workspace's dependencies among the workspaces
+function workspaceGraph() {
+  const paths = {};
+  const deps = {};
+  for (const group of ['apps', 'packages']) {
+    for (const name of readdirSync(join(REPO, group))) {
+      const file = join(REPO, group, name, 'package.json');
+      if (!existsSync(file)) continue;
+      const pkg = JSON.parse(readFileSync(file, 'utf8'));
+      paths[pkg.name] = `${group}/${name}`;
+    }
+  }
+  for (const [name, ws] of Object.entries(paths)) {
+    const pkg = JSON.parse(readFileSync(join(REPO, ws, 'package.json'), 'utf8'));
+    const all = { ...pkg.dependencies, ...pkg.peerDependencies, ...pkg.optionalDependencies };
+    deps[name] = Object.keys(all).filter((d) => d in paths).sort();
+  }
+  return { paths, deps };
+}
+
+// A built dist/<x>.js is src/<x>.ts in the workspace; a repository file is itself.
+const sourceOf = (entry) => entry.replace(/^((?:apps|packages)\/[^/]+)\/dist\/(.+)\.js$/, '$1/src/$2.ts');
+
+// Static and dynamic imports, and require. An `import type`/`export type` statement is
+// erased by tsc, and so is a `{ type X }` specifier, so an import whose specifiers are all
+// types counts for nothing.
+const IMPORT = /(?:^|\n)\s*(?:import|export)\s(?!type\s)([^;'"]*?)from\s*['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)|\brequire\(\s*['"]([^'"]+)['"]\s*\)/g;
+function valueImport(clause) {
+  const braces = /\{([^}]*)\}/.exec(clause ?? '');
+  if (!braces) return true;
+  const names = braces[1].split(',').map((n) => n.trim()).filter(Boolean);
+  return names.some((n) => !n.startsWith('type ')) || /^\s*[\w$]+\s*,?\s*\{|\*\s+as/.test(clause);
+}
+function resolveRelative(from, spec) {
+  const base = join(dirname(from), spec).replace(/\.js$/, '');
+  for (const candidate of [`${base}.ts`, `${base}.tsx`, `${base}.mts`, join(base, 'index.ts'), `${base}.mjs`, base]) {
+    if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
+  }
+  return null;
+}
+// the workspace names an entry reaches: its own file graph, then the packages' declared dependencies
+function reached(entry, graph) {
+  const names = new Set();
+  const seen = new Set();
+  const stack = [join(REPO, sourceOf(entry))];
+  while (stack.length) {
+    const file = stack.pop();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    assert.ok(existsSync(file), `entry source missing: ${file}`);
+    const text = readFileSync(file, 'utf8');
+    for (const m of text.matchAll(IMPORT)) {
+      if (m[2] !== undefined && !valueImport(m[1])) continue;
+      const spec = m[2] ?? m[3] ?? m[4];
+      if (spec.startsWith('@space/')) names.add(spec.split('/').slice(0, 2).join('/'));
+      else if (spec.startsWith('.')) { const r = resolveRelative(file, spec); if (r) stack.push(r); }
+    }
+  }
+  const closure = new Set();
+  const todo = [...names];
+  while (todo.length) {
+    const n = todo.pop();
+    if (closure.has(n)) continue;
+    closure.add(n);
+    todo.push(...(graph.deps[n] ?? []));
+  }
+  return closure;
+}
+
+for (const [name, { scripts, entries }] of Object.entries(ENTRYPOINTS)) {
+  test(`${name} plan stages every workspace its entrypoints import`, () => {
+    for (const entry of entries) {
+      const named = scripts.some((s) => readFileSync(join(REPO, s), 'utf8').includes(entry.replace(/^\/app\//, '')));
+      assert.ok(named, `${entry} is what ${scripts.join(' or ')} runs`);
+    }
+    const graph = workspaceGraph();
+    const plan = stager.planClosure({ repoRoot: REPO, target: name });
+    for (const entry of entries) {
+      for (const pkg of reached(entry, graph)) {
+        const ws = graph.paths[pkg];
+        assert.ok(ws, `${pkg} is a workspace`);
+        assert.ok(plan.workspaces.includes(ws), `${name} stages ${ws}, which ${entry} reaches`);
+      }
+    }
+  });
+
+  test(`${name} plan is closed under workspace dependencies, except what it excludes`, () => {
+    const graph = workspaceGraph();
+    const plan = stager.planClosure({ repoRoot: REPO, target: name });
+    const byPath = Object.fromEntries(Object.entries(graph.paths).map(([n, p]) => [p, n]));
+    for (const ws of plan.installWorkspaces) {
+      for (const dep of graph.deps[byPath[ws]] ?? []) {
+        const depPath = graph.paths[dep];
+        const ok = plan.workspaces.includes(depPath) || plan.excludes.includes(depPath) || plan.excludes.includes(dep);
+        assert.ok(ok, `${name}: ${ws} depends on ${dep} (${depPath}), which is neither staged nor excluded`);
+      }
+    }
+  });
+}

@@ -7,7 +7,14 @@
 //                                     runtime stage and returns the same plan.
 //
 // The plans are declared, not discovered: each target names the workspaces it runs and
-// the packages it must never ship. The closure test holds this file to those tables.
+// the packages it must never ship. The closure test holds this file to those tables, and
+// holds each table to the imports the target's entrypoints reach in the sources.
+//
+// A plan's workspaces are closed under the workspace dependencies in package.json: an
+// installed workspace links every @space package it depends on, and npm creates the
+// link's target directory for the nested node_modules the lockfile records there even
+// when the workspace is not staged, so a workspace left out leaves a link to a directory
+// with no package in it, and the runtime fails on the first import of it.
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -15,15 +22,24 @@ const ROOT_PACKAGE = { name: 'spaceapp', private: true };
 
 const TARGETS = {
   core: {
+    // apps/api (server.js) and apps/worker (worker.js) and everything they import:
+    // runtime, streaming, db, cli-host, contracts, memory-graph, gateway, browser-host,
+    // codex-app-server and opencode-control, each a value import in the sources.
     workspaces: [
       'apps/api', 'apps/worker', 'apps/web',
-      'packages/cli-host', 'packages/db',
-      'packages/runtime', 'packages/streaming',
+      'packages/browser-host', 'packages/cli-host', 'packages/codex-app-server',
+      'packages/contracts', 'packages/db', 'packages/gateway', 'packages/memory-graph',
+      'packages/opencode-control', 'packages/runtime', 'packages/streaming',
     ],
     // apps/web is staged dist-only: its 22 client packages (react, codemirror,
     // xterm...) are bundled by vite and never run in the server. Installing them
     // would blow the 850 MiB core budget for nothing.
-    installWorkspaces: ['apps/api', 'apps/worker', 'packages/cli-host', 'packages/db', 'packages/runtime', 'packages/streaming'],
+    installWorkspaces: [
+      'apps/api', 'apps/worker',
+      'packages/browser-host', 'packages/cli-host', 'packages/codex-app-server',
+      'packages/contracts', 'packages/db', 'packages/gateway', 'packages/memory-graph',
+      'packages/opencode-control', 'packages/runtime', 'packages/streaming',
+    ],
     excludes: [],
     keeps: ['node-pty', '@space/cli-host', '@temporalio', 'agent-skills'],
     files: [
@@ -39,10 +55,19 @@ const TARGETS = {
     ],
   },
   browser: {
-    workspaces: ['apps/api'],
+    // apps/api (browser-host-main.js) imports browser-host, contracts, db and runtime,
+    // and runtime imports memory-graph. The rest of api's workspace dependencies are
+    // staged too, so that every link npm makes for api resolves to a package; cli-host
+    // is the exception, removed after the install with node-pty and the Temporal stack.
+    workspaces: [
+      'apps/api',
+      'packages/browser-host', 'packages/codex-app-server', 'packages/contracts',
+      'packages/db', 'packages/gateway', 'packages/memory-graph',
+      'packages/opencode-control', 'packages/runtime', 'packages/streaming',
+    ],
     excludes: [
       '@space/cli-host', 'node-pty', 'packages/cli-host',
-      '@temporalio', 'apps/worker', 'packages/db',
+      '@temporalio', 'apps/worker',
     ],
     keeps: [],
     files: [
@@ -76,6 +101,8 @@ const WORKSPACE_PAYLOAD = {
   'packages/cli-host': [['dist', 'dist', true]],
   'packages/db': [['dist', 'dist', true], ['migrations', 'migrations', true]],
   'packages/contracts': [['dist', 'dist', true]],
+  // gateway loads its tree-sitter grammars from grammars/ next to dist/ at run time
+  'packages/gateway': [['dist', 'dist', true], ['grammars', 'grammars', true]],
 };
 
 export function planClosure({ repoRoot, target }) {
