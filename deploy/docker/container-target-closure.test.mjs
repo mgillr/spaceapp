@@ -17,6 +17,7 @@ const REPO = join(HERE, '..', '..');
 const FIXTURE_SRC = join(HERE, 'fixtures', 'closure', 'repo');
 const FIXTURE = mkdtempSync(join(tmpdir(), 'closure-fixture-'));
 cpSync(FIXTURE_SRC, FIXTURE, { recursive: true });
+/** Renames every `dist.fixture` directory under `dir` back to `dist`, recursively. @param {string} dir */
 const restoreDist = (dir) => {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
@@ -37,6 +38,7 @@ test('the committed fixture keeps its built files out of dist directories', () =
 
 const stager = await import(join(HERE, 'stage-target.mjs'));
 
+/** The fixture repository's closure plan for one target. @param {string} name @returns {object} */
 const target = (name) => stager.planClosure({ repoRoot: FIXTURE, target: name });
 
 test('cli plan: only the cli-host workspace, every foreign package excluded', () => {
@@ -191,7 +193,10 @@ const ENTRYPOINTS = {
   },
 };
 
-// name -> workspace path, and each workspace's dependencies among the workspaces
+/**
+ * The repository's workspaces: package name to path, and each workspace's dependencies among them.
+ * @returns {{ paths: Record<string, string>, deps: Record<string, string[]> }}
+ */
 function workspaceGraph() {
   const paths = {};
   const deps = {};
@@ -211,19 +216,30 @@ function workspaceGraph() {
   return { paths, deps };
 }
 
-// A built dist/<x>.js is src/<x>.ts in the workspace; a repository file is itself.
+/** The source of a built entry: dist/<x>.js is src/<x>.ts in its workspace; a repository file is itself. @param {string} entry @returns {string} */
 const sourceOf = (entry) => entry.replace(/^((?:apps|packages)\/[^/]+)\/dist\/(.+)\.js$/, '$1/src/$2.ts');
 
 // Static and dynamic imports, and require. An `import type`/`export type` statement is
 // erased by tsc, and so is a `{ type X }` specifier, so an import whose specifiers are all
 // types counts for nothing.
 const IMPORT = /(?:^|\n)\s*(?:import|export)\s(?!type\s)([^;'"]*?)from\s*['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)|\brequire\(\s*['"]([^'"]+)['"]\s*\)/g;
+/**
+ * Whether an import clause brings in a value: an import whose specifiers are all types is erased by tsc.
+ * @param {string | undefined} clause the text between `import` and `from`
+ * @returns {boolean}
+ */
 function valueImport(clause) {
   const braces = /\{([^}]*)\}/.exec(clause ?? '');
   if (!braces) return true;
   const names = braces[1].split(',').map((n) => n.trim()).filter(Boolean);
   return names.some((n) => !n.startsWith('type ')) || /^\s*[\w$]+\s*,?\s*\{|\*\s+as/.test(clause);
 }
+/**
+ * Resolves a relative import to a source file next to `from`, trying the TypeScript and module suffixes.
+ * @param {string} from the importing file
+ * @param {string} spec the relative specifier
+ * @returns {string | null}
+ */
 function resolveRelative(from, spec) {
   const base = join(dirname(from), spec).replace(/\.js$/, '');
   for (const candidate of [`${base}.ts`, `${base}.tsx`, `${base}.mts`, join(base, 'index.ts'), `${base}.mjs`, base]) {
@@ -231,7 +247,12 @@ function resolveRelative(from, spec) {
   }
   return null;
 }
-// the workspace names an entry reaches: its own file graph, then the packages' declared dependencies
+/**
+ * The @space workspaces an entry reaches: its own import graph, then the packages' declared dependencies.
+ * @param {string} entry a built entry path
+ * @param {{ paths: Record<string, string>, deps: Record<string, string[]> }} graph
+ * @returns {Set<string>}
+ */
 function reached(entry, graph) {
   const names = new Set();
   const seen = new Set();

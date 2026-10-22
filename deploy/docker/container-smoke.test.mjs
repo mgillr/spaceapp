@@ -18,6 +18,7 @@ const workflow = readFileSync(join(REPO, '.github/workflows/containers.yml'), 'u
 
 // The workflow's steps, as blocks, in order.
 const steps = workflow.split(/\n {6}- /).slice(1);
+/** The position of the workflow step with this name, or -1. @param {string} name @returns {number} */
 const stepIndex = (name) => steps.findIndex((s) => new RegExp(`^name: ${name}`).test(s));
 
 test('smoke covers every target and arch without skips', () => {

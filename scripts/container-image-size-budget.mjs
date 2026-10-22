@@ -21,6 +21,11 @@ export const containerImageSizeBudgets = Object.freeze({
   cli: 891 * mebibyte
 });
 
+/**
+ * Compares an image size with its target's budget.
+ * @param {{ target: 'core' | 'browser' | 'cli', sizeBytes: number }} options
+ * @returns {{ target: string, sizeBytes: number, budgetBytes: number, remainingBytes: number, ok: boolean }}
+ */
 export function evaluateContainerImageSize({ target, sizeBytes }) {
   const budgetBytes = containerImageSizeBudgets[target];
   if (budgetBytes === undefined) {
@@ -40,15 +45,31 @@ export function evaluateContainerImageSize({ target, sizeBytes }) {
   };
 }
 
+/**
+ * The value following a `--name` option, or undefined.
+ * @param {string[]} args
+ * @param {string} name
+ * @returns {string | undefined}
+ */
 function optionValue(args, name) {
   const index = args.indexOf(name);
   return index === -1 ? undefined : args[index + 1];
 }
 
+/**
+ * Formats a byte count as MiB with one decimal.
+ * @param {number} bytes
+ * @returns {string}
+ */
 function formatMebibytes(bytes) {
   return `${(bytes / mebibyte).toFixed(1)} MiB`;
 }
 
+/**
+ * The size Docker reports for a local image (`docker image inspect --format '{{.Size}}'`).
+ * @param {string} image
+ * @returns {number} bytes
+ */
 export function inspectContainerImageSize(image) {
   const output = execFileSync(
     "docker",
@@ -58,6 +79,12 @@ export function inspectContainerImageSize(image) {
   return Number(output);
 }
 
+/**
+ * The command-line entry: measures `--image` and enforces the budget of `--target`, printing the summary
+ * and throwing when the budget is exceeded.
+ * @param {string[]} [args] defaults to the process arguments
+ * @returns {ReturnType<typeof evaluateContainerImageSize>}
+ */
 export function runContainerImageSizeBudget(args = process.argv.slice(2)) {
   const target = optionValue(args, "--target");
   const image = optionValue(args, "--image");

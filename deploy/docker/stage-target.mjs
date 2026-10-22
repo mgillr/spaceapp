@@ -105,6 +105,12 @@ const WORKSPACE_PAYLOAD = {
   'packages/gateway': [['dist', 'dist', true], ['grammars', 'grammars', true]],
 };
 
+/**
+ * The declared closure of one image target: the workspaces it runs, the ones whose dependencies are
+ * installed, the packages it must keep or never ship, and the repository files it carries.
+ * @param {{ repoRoot: string, target: 'core' | 'browser' | 'cli' }} options
+ * @returns {{ target: string, workspaces: string[], installWorkspaces: string[], keeps: string[], excludes: string[], files: { from: string, to: string }[] }}
+ */
 export function planClosure({ repoRoot, target }) {
   const spec = TARGETS[target];
   if (!spec) throw new Error(`unknown target: ${target}`);
@@ -124,6 +130,13 @@ export function planClosure({ repoRoot, target }) {
   };
 }
 
+/**
+ * Copies the target's closure from the repository into `outDir`: a pruned root package.json, each
+ * workspace's package.json and built payload, the lockfile, the plan's files, and the list files the
+ * Dockerfile reads (workspaces, install-workspaces, excludes).
+ * @param {{ repoRoot: string, target: string, outDir: string }} options
+ * @returns {ReturnType<typeof planClosure> & { files: string[] }} the plan plus every path written
+ */
 export function stageClosure({ repoRoot, target, outDir }) {
   const plan = planClosure({ repoRoot, target });
   rmSync(outDir, { recursive: true, force: true });
@@ -177,6 +190,12 @@ export function stageClosure({ repoRoot, target, outDir }) {
   return { ...plan, files };
 }
 
+/**
+ * Checks an installed staging tree against its plan: every required payload present, no excluded
+ * package or path shipped, every keep present in node_modules. Throws with the full list of problems.
+ * @param {{ root: string, target: string }} options
+ * @returns {{ target: string, ok: true }}
+ */
 export function verifyStaged({ root, target }) {
   const plan = planClosure({ repoRoot: root, target });
   const problems = [];

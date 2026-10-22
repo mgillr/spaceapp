@@ -55,14 +55,23 @@ const SOCKETS = {
 
 class SmokeError extends Error {}
 
-// The version the cli image installs: `npm install --global ... @opencode/cli@<version>`.
+/**
+ * The OpenCode version the cli image installs (`npm install --global ... @opencode/cli@<version>`).
+ * @param {string} [root] repository root holding the Dockerfile
+ * @returns {string} the pinned x.y.z
+ */
 export function opencodePin(root = REPO_ROOT) {
   const m = readFileSync(join(root, 'Dockerfile'), 'utf8').match(/@opencode\/cli@(\d+\.\d+\.\d+)/);
   if (!m) throw new Error('Dockerfile pins no @opencode/cli version');
   return m[1];
 }
 
-// One service of the launcher's compose template: its image reference and its environment block.
+/**
+ * One service of the launcher's compose template: its image reference and its environment block.
+ * @param {string} service the compose service name
+ * @param {string} [root] repository root holding the template
+ * @returns {{ image: string, environment: [string, string][] }}
+ */
 export function templateService(service, root = REPO_ROOT) {
   const lines = readFileSync(join(root, TEMPLATE), 'utf8').split('\n');
   const start = lines.indexOf(`  ${service}:`);
@@ -81,8 +90,13 @@ export function templateService(service, root = REPO_ROOT) {
   return { image, environment };
 }
 
-// The launcher's `${NAME}` and `${NAME:-default}` placeholders, filled from the smoke's own inputs.
-// A placeholder the smoke does not set is an error: the launcher would start the service without it.
+/**
+ * Fills the launcher's `${NAME}` and `${NAME:-default}` placeholders from the smoke's own inputs.
+ * A placeholder the smoke does not set is an error: the launcher would start the service without it.
+ * @param {string} value a template value
+ * @param {Record<string, string>} inputs the values the smoke provides
+ * @returns {string}
+ */
 export function expand(value, inputs) {
   return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}/g, (whole, name, withDefault, fallback) => {
     if (Object.hasOwn(inputs, name)) return inputs[name];
@@ -91,28 +105,57 @@ export function expand(value, inputs) {
   });
 }
 
+/**
+ * The `-e KEY=value` arguments for one template service, expanded, with overrides applied last.
+ * @param {string} service
+ * @param {Record<string, string>} inputs
+ * @param {Record<string, string>} [overrides]
+ * @returns {string[]}
+ */
 function serviceEnv(service, inputs, overrides = {}) {
   const env = Object.fromEntries(templateService(service).environment.map(([k, v]) => [k, expand(v, inputs)]));
   return Object.entries({ ...env, ...overrides }).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
 }
 
+/**
+ * Runs a command to completion and returns its exit code and trimmed output.
+ * @param {string} cmd
+ * @param {string[]} args
+ * @returns {{ code: number, out: string, err: string }}
+ */
 const run = (cmd, args) => {
   const r = spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   return { code: r.status ?? -1, out: (r.stdout || '').trim(), err: (r.stderr || r.error?.message || '').trim() };
 };
+/** Runs `docker` with the given arguments. @param {...string} args @returns {{ code: number, out: string, err: string }} */
 const docker = (...args) => run('docker', args);
+/** Blocks the thread for `ms` milliseconds. @param {number} ms */
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
+/**
+ * Runs a docker command that has to succeed; a failure ends the smoke with `what` in the reason.
+ * @param {string[]} args docker arguments
+ * @param {string} what the step, for the error
+ * @returns {{ code: number, out: string, err: string }}
+ */
 function must(args, what) {
   const r = docker(...args);
   if (r.code !== 0) throw new SmokeError(`${what}: ${r.err || r.out}`);
   return r;
 }
 
-// Polls `probe` until it answers done(value), for at most `seconds`. A wait(note) answer keeps
-// the note for the error.
+/** A probe answer that ends the wait with `value`. @param {*} value */
 const done = (value) => ({ done: true, value });
+/** A probe answer that keeps waiting; `note` is kept for the timeout error. @param {string} note */
 const wait = (note) => ({ done: false, note: typeof note === 'string' ? note : '' });
+/**
+ * Polls `probe` every three seconds until it answers done(value), for at most `seconds`; a wait(note)
+ * answer keeps the note for the error.
+ * @param {string} what the condition, for the error
+ * @param {number} seconds the deadline
+ * @param {() => { done: boolean, value?: *, note?: string }} probe
+ * @returns {*} the value the probe answered
+ */
 function waitFor(what, seconds, probe) {
   const until = Date.now() + seconds * 1000;
   let last = '';
@@ -125,6 +168,11 @@ function waitFor(what, seconds, probe) {
   throw new SmokeError(`${what} did not happen within ${seconds} s${last ? ` (last: ${last.slice(0, 300)})` : ''}`);
 }
 
+/**
+ * Parses JSON, answering null instead of throwing.
+ * @param {string} text
+ * @returns {*}
+ */
 function parseJson(text) {
   try { return JSON.parse(text); } catch { return null; }
 }
@@ -134,7 +182,16 @@ const READYZ = "fetch('http://127.0.0.1:4911/readyz').then(r=>r.text()).then(t=>
 const PING = "const m=await import('/app/packages/cli-host/dist/client.js');const c=new m.CliHostClient({socketPath:'" + SOCKETS.cli + "'});const r=await c.ping();process.stdout.write(JSON.stringify(r));await c.close();";
 const BROWSER_HEALTH = "const m=await import('/app/packages/browser-host/dist/client.js');const c=new m.BrowserHostClient({socketPath:'" + SOCKETS.browser + "'});const h=await c.health();process.stdout.write(JSON.stringify(h));await c.close();";
 
+/**
+ * The containers one smoke needs: a private network, the launcher's secrets as a bind mount, the
+ * companion services the template names, and the image under test, all removed by destroy().
+ */
 class Stack {
+  /**
+   * @param {string} target core, browser or cli
+   * @param {string} arch amd64 or arm64
+   * @param {string} image the image under test
+   */
   constructor(target, arch, image) {
     this.target = target;
     this.arch = arch;
@@ -165,9 +222,16 @@ class Stack {
     must(['network', 'create', this.net], 'create the smoke network');
   }
 
+  /** The container name for a role of this stack. @param {string} role @returns {string} */
   name(role) { return `${this.prefix}-${role}`; }
 
-  // Starts one container on the smoke network under the launcher's service name.
+  /**
+   * Starts one container on the smoke network under the launcher's service name.
+   * @param {string} role the stack role (postgres, temporal, app)
+   * @param {string} alias the network alias the other services expect
+   * @param {string[]} args the rest of the `docker run` arguments, image last
+   * @returns {string} the container name
+   */
   start(role, alias, args) {
     const name = this.name(role);
     this.containers.push(name);
@@ -176,10 +240,22 @@ class Stack {
     return name;
   }
 
-  // Runs a command in one of the stack's containers, as root unless `user` is given.
+  /**
+   * Runs a command in one of the stack's containers, as root unless `user` is given.
+   * @param {string} role
+   * @param {string[]} args
+   * @param {string} [user]
+   * @returns {{ code: number, out: string, err: string }}
+   */
   exec(role, args, user) { return docker('exec', ...(user ? ['-u', user] : []), this.name(role), ...args); }
 
-  // The template's health checks, run until they pass.
+  /**
+   * Runs one of the template's health check commands in a container until it passes.
+   * @param {string} role
+   * @param {string} what the condition, for the error
+   * @param {number} seconds the deadline
+   * @param {string[]} command
+   */
   healthy(role, what, seconds, command) {
     waitFor(what, seconds, () => {
       const r = this.exec(role, command);
@@ -187,12 +263,14 @@ class Stack {
     });
   }
 
+  /** Starts the template's pgvector PostgreSQL and waits for it to accept connections. */
   postgres() {
     const { image } = templateService('postgres');
     this.start('postgres', 'postgres', [...serviceEnv('postgres', this.inputs), image]);
     this.healthy('postgres', 'postgres ready', DEADLINES.postgres, ['pg_isready', '-U', 'spaceapp', '-d', 'spaceapp']);
   }
 
+  /** Starts the template's Temporal auto-setup against postgres and waits for its namespace. */
   temporal() {
     const { image } = templateService('temporal');
     // The template's command: the password comes from the secret, then auto-setup takes over.
@@ -202,11 +280,18 @@ class Stack {
       'temporal operator cluster health --address temporal:7233 >/dev/null && temporal operator namespace describe --namespace default --address temporal:7233 >/dev/null']);
   }
 
-  // The image under test, run the way the launcher runs it.
+  /**
+   * Starts the image under test the way the launcher runs it.
+   * @param {string} service the compose service name, used as the network alias
+   * @param {string[]} envArgs the `-e KEY=value` arguments
+   * @param {string[]} [extra] further `docker run` arguments
+   * @returns {string} the container name
+   */
   app(service, envArgs, extra = []) {
     return this.start('app', service, ['--init', '--security-opt', 'no-new-privileges:true', ...extra, ...envArgs, this.image]);
   }
 
+  /** The last 150 log lines of every container of the stack. @returns {string} */
   logs() {
     return this.containers.map((c) => {
       const r = docker('logs', '--tail', '150', c);
@@ -214,6 +299,7 @@ class Stack {
     }).join('\n');
   }
 
+  /** Removes the containers, the network and the temporary directory. */
   destroy() {
     for (const c of this.containers) docker('rm', '-f', c);
     docker('network', 'rm', this.net);
@@ -221,6 +307,12 @@ class Stack {
   }
 }
 
+/**
+ * The core check: postgres and Temporal from the template, then the image until /readyz answers ok
+ * with the database, the worker and session revocations RUNNING and Docker's HEALTHCHECK is healthy.
+ * @param {Stack} stack
+ * @returns {string[]} the markers the line reports
+ */
 function smokeCore(stack) {
   stack.postgres();
   stack.temporal();
@@ -248,6 +340,12 @@ function smokeCore(stack) {
   return [MARKERS.database, MARKERS.worker, MARKERS.health];
 }
 
+/**
+ * The cli check: the image until the CLI host answers a ping over its socket, then `opencode --version`
+ * against the Dockerfile pin.
+ * @param {Stack} stack
+ * @returns {string[]} the markers the line reports
+ */
 function smokeCli(stack) {
   stack.app('spaceapp-cli', serviceEnv('spaceapp-cli', stack.inputs));
   waitFor('CliHostClient ping over the host socket', DEADLINES.socket, () => {
@@ -264,6 +362,12 @@ function smokeCli(stack) {
   return [MARKERS.ping, `opencode=${reported}`];
 }
 
+/**
+ * The browser check: postgres, the migrations from the image, then the image until the browser host
+ * reports healthy, and one headless Chromium launch as the service user.
+ * @param {Stack} stack
+ * @returns {string[]} the markers the line reports
+ */
 function smokeBrowser(stack) {
   stack.postgres();
   // The launcher's core service migrates the database before the browser host first needs it.
@@ -290,8 +394,12 @@ function smokeBrowser(stack) {
 
 export const SMOKES = { core: smokeCore, browser: smokeBrowser, cli: smokeCli };
 
-// Runs the smoke for one image. Returns the line to print and whether it passed; the container
-// logs of a failed run go to stderr.
+/**
+ * Runs the smoke for one image: the platform check, the stack, the target's check, the clean-up.
+ * The container logs of a failed run go to stderr.
+ * @param {{ target: string, arch: string, image: string }} options
+ * @returns {{ ok: boolean, line: string }} whether it passed and the line to print
+ */
 export function smoke({ target, arch, image }) {
   if (!TARGETS.includes(target)) throw new Error(`unknown target ${target}`);
   if (!ARCHES.includes(arch)) throw new Error(`unknown arch ${arch}`);
