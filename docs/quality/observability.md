@@ -355,6 +355,7 @@ No credential or transcript export was added.
 | `apps/worker/tests/otlp-backpressure.test.ts` | Hanging and failing collectors: workflows finish, activities are not delayed, the queue drops and counts |
 | `apps/worker/tests/otlp-replay-silent.test.ts` | Replay emits no span and has no determinism error; the sandboxed code does no I/O |
 | `apps/worker/tests/otlp-continuation-link.test.ts` | A background continuation stays in the source trace and links to the run it continues |
+| `apps/worker/tests/otlp-supervisor-tree.test.ts` | A supervised Room Agent mission: the supervisor run under its starting request, the mission turn under its own request and linked to the supervisor run |
 
 ## Not covered
 
