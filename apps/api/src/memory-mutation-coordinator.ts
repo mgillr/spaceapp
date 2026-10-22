@@ -7,6 +7,7 @@ import {
   type MemoryMutationWorkflowInput
 } from "@space/contracts";
 import { SpaceFeatureDisabledError } from "@space/runtime";
+import { requestWorkflowMemo } from "./trace-context.js";
 
 export { MEMORY_MUTATION_TASK_QUEUE, MEMORY_MUTATION_WORKFLOW_TYPE, buildMemoryMutationWorkflowId };
 
@@ -45,13 +46,16 @@ export async function scheduleMemoryMutation(
 ): Promise<MemoryMutationStartResult> {
   const input = memoryMutationWorkflowInputSchema.parse(rawInput);
   const workflowId = buildMemoryMutationWorkflowId(input.changeSetId, commandHash);
+  // The workflow span joins the request's trace when the request is known.
+  const memo = requestWorkflowMemo(input.traceId);
   try {
     const handle = await startWorkflow(MEMORY_MUTATION_WORKFLOW_TYPE, {
       args: [input],
       taskQueue: MEMORY_MUTATION_TASK_QUEUE,
       workflowId,
       workflowIdReusePolicy: "REJECT_DUPLICATE",
-      workflowIdConflictPolicy: "USE_EXISTING"
+      workflowIdConflictPolicy: "USE_EXISTING",
+      ...(memo ? { memo } : {})
     });
     return { status: "SCHEDULED", workflowId: handle.workflowId, runId: handle.firstExecutionRunId ?? null };
   } catch (error) {
