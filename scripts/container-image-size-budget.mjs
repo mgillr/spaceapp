@@ -10,10 +10,15 @@ const mebibyte = 1024 * 1024;
 // js-tiktoken (22 MiB, Space Gateway token counting).
 // 1.1.5 raised core again: linux/arm64 measured 1066.9 MiB and linux/amd64 1045.0 MiB (sqlite3 in the image,
 // the 1.1.5 application); the first public release run failed the arm64 build at 1050 MiB.
+// 1.1.7 lowered all three to the per-target closures (each image installs only the workspaces it runs). Measured on
+// 2026-10-22 on a 16-core Linux host for both architectures, as `docker image inspect .Size` reports them on the
+// classic image store: core 793.0 / 824.9 MiB, browser 1234.0 / 1258.1 MiB, cli 839.8 / 669.4 MiB (amd64 / arm64).
+// Each budget is the larger architecture plus about 6 %, rounded up, and never above the ceilings the per-service
+// images were asked to meet: core 850, browser 1350, cli 1000 MiB.
 export const containerImageSizeBudgets = Object.freeze({
-  core: 1100 * mebibyte,
-  browser: 1750 * mebibyte,
-  cli: 2800 * mebibyte
+  core: 850 * mebibyte,
+  browser: 1334 * mebibyte,
+  cli: 891 * mebibyte
 });
 
 export function evaluateContainerImageSize({ target, sizeBytes }) {
