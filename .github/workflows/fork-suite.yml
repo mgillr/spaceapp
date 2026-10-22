@@ -1,0 +1,67 @@
+name: Fork full suite
+
+# Fork-only copy of the "Sanitized public quality gates" job in ci.yml, for
+# running the full suite on a contributor branch. It skips only the "Verify
+# export provenance" step, because the fork tree can't match the release export
+# manifest (every changed file differs from it), so that step fails before any
+# test runs. Every other step is the same, plus lint.
+
+on:
+  push:
+    branches:
+      - ci-62-suite
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-suite-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  public-quality:
+    name: Public quality gates without export provenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Create sanitized candidate
+        run: >-
+          node scripts/public-export.mjs
+          --output "$RUNNER_TEMP/spaceapp-public-export"
+
+      - name: Install candidate dependencies
+        working-directory: ${{ runner.temp }}/spaceapp-public-export
+        run: npm ci
+
+      - name: Install ripgrep and ffmpeg (the file search tests run the real rg, the Nous attachment tests make media with ffmpeg)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep ffmpeg
+
+      - name: Public release tests
+        working-directory: ${{ runner.temp }}/spaceapp-public-export
+        run: npm run test:public
+
+      - name: Typecheck candidate
+        working-directory: ${{ runner.temp }}/spaceapp-public-export
+        run: npm run check
+
+      - name: Lint candidate
+        working-directory: ${{ runner.temp }}/spaceapp-public-export
+        run: npm run lint
+
+      - name: Build candidate
+        working-directory: ${{ runner.temp }}/spaceapp-public-export
+        run: npm run build
+
+      - name: Pack launcher candidate
+        working-directory: ${{ runner.temp }}/spaceapp-public-export
+        run: npm run pack:dry-run -w run-spaceapp
