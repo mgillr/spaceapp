@@ -4,14 +4,36 @@
 // runtime, and the Dockerfile keeps every protected value.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync, rmSync, mkdirSync, mkdtempSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, rmSync, mkdirSync, mkdtempSync, readdirSync, statSync, cpSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
-const FIXTURE = join(HERE, 'fixtures', 'closure', 'repo');
+// The committed fixture keeps its built files under `dist.fixture` directories: the public export audit rejects any
+// path segment named `dist` (scripts/public-export.mjs) and deploy/docker ships in the public tree. The planner and the
+// stager expect `dist`, so the tests run against a copy of the fixture with those directories renamed back.
+const FIXTURE_SRC = join(HERE, 'fixtures', 'closure', 'repo');
+const FIXTURE = mkdtempSync(join(tmpdir(), 'closure-fixture-'));
+cpSync(FIXTURE_SRC, FIXTURE, { recursive: true });
+const restoreDist = (dir) => {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (entry.name === 'dist.fixture') renameSync(join(dir, entry.name), join(dir, 'dist'));
+    else restoreDist(join(dir, entry.name));
+  }
+};
+restoreDist(FIXTURE);
+process.on('exit', () => rmSync(FIXTURE, { recursive: true, force: true }));
+
+test('the committed fixture keeps its built files out of dist directories', () => {
+  const dirs = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? [e.name, ...dirs(join(dir, e.name))] : []));
+  const committed = dirs(FIXTURE_SRC);
+  assert.ok(!committed.includes('dist'), 'the public export audit rejects any path segment named dist');
+  assert.ok(committed.includes('dist.fixture'), 'the built files live under dist.fixture');
+  assert.ok(existsSync(join(FIXTURE, 'packages/cli-host/dist/main.js')), 'the copy the tests use has dist again');
+});
 
 const stager = await import(join(HERE, 'stage-target.mjs'));
 
