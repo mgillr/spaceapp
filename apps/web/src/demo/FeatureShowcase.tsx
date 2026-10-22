@@ -2,8 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import type { MemoryGraphNode, MemoryGraphEdge } from "@space/contracts";
 import { LivePane } from "../features/live-pane/LivePane.js";
 import { MemoryGraph3D } from "../features/memory-workspace/MemoryGraph3D.js";
-import { createMemoryAtlas } from "../features/memory-workspace/memory-atlas.js";
-import { layoutMemoryNetwork3D } from "../features/memory-workspace/memory-3d.js";
 import { createShowcaseFixture } from "./showcase-fixture.js";
 import "../features/memory-workspace/memory-atlas.css";
 import "./feature-showcase.css";
@@ -146,30 +144,12 @@ export function FeatureShowcase({ kind }: { kind: "voice" | "memory" }) {
   const [running, setRunning] = useState(false);
   const [angle, setAngle] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
-  const atlas = useMemo(
-    () => createMemoryAtlas(graph.nodes, graph.edges, false),
-    [],
-  );
-  const base = useMemo(
+  const source = useMemo(
     () =>
       kind === "memory"
-        ? layoutMemoryNetwork3D(graph.nodes, graph.edges)
-        : new Map(),
+        ? { kind: "inline" as const, nodes: graph.nodes, edges: graph.edges }
+        : null,
     [kind],
-  );
-  const coordinates = useMemo(
-    () =>
-      new Map(
-        [...base].map(([id, p]) => [
-          id,
-          {
-            x: p.x * Math.cos(angle) - p.z * Math.sin(angle),
-            y: p.y,
-            z: p.x * Math.sin(angle) + p.z * Math.cos(angle),
-          },
-        ]),
-      ),
-    [base, angle],
   );
   useEffect(() => {
     const send = (payload: object) =>
@@ -237,10 +217,8 @@ export function FeatureShowcase({ kind }: { kind: "voice" | "memory" }) {
             </span>
           </div>
           <MemoryGraph3D
-            nodes={graph.nodes}
-            edges={graph.edges}
-            positions={atlas.positions}
-            coordinates={coordinates}
+            source={source}
+            spin={angle}
             showTitles={step > 0}
             selectedNodeId={selected}
             onSelectNode={setSelected}
