@@ -6,6 +6,7 @@ import {
   type MemoryConsolidationWorkflowInput
 } from "@space/contracts";
 import { SpaceFeatureDisabledError } from "@space/runtime";
+import { requestWorkflowMemo } from "./trace-context.js";
 
 export { MEMORY_CONSOLIDATION_TASK_QUEUE, MEMORY_CONSOLIDATION_WORKFLOW_TYPE };
 
@@ -43,13 +44,16 @@ export async function scheduleMemoryConsolidation(
   startWorkflow: MemoryConsolidationWorkflowStarter
 ): Promise<MemoryConsolidationStartResult> {
   const input = memoryConsolidationWorkflowInputSchema.parse(rawInput);
+  // The workflow span joins the request's trace when the request is known.
+  const memo = requestWorkflowMemo(input.traceId);
   try {
     const handle = await startWorkflow(MEMORY_CONSOLIDATION_WORKFLOW_TYPE, {
       args: [input],
       taskQueue: MEMORY_CONSOLIDATION_TASK_QUEUE,
       workflowId,
       workflowIdReusePolicy: "REJECT_DUPLICATE",
-      workflowIdConflictPolicy: "USE_EXISTING"
+      workflowIdConflictPolicy: "USE_EXISTING",
+      ...(memo ? { memo } : {})
     });
     return {
       status: "SCHEDULED",

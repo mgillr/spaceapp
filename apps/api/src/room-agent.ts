@@ -226,7 +226,9 @@ export class TemporalRoomAgentWorkflowCoordinator implements RoomAgentWorkflowCo
         taskQueue: this.options.taskQueue,
         args: [{ roomId: item.turn.roomId, pending: [], processedCount: 0 }],
         signal: ROOM_AGENT_ENQUEUE_SIGNAL,
-        signalArgs: [item]
+        signalArgs: [item],
+        // Used only when this signal starts the room's supervisor run.
+        memo: workflowCorrelationMemo({ traceId: item.turn.traceId, traceparent: item.turn.traceparent })
       });
       recordWorkflowStart(ROOM_AGENT_SUPERVISOR_WORKFLOW_TYPE, "SIGNALED");
       return { workflowId, runId: handle.signaledRunId };
