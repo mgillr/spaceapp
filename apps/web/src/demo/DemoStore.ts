@@ -1,5 +1,7 @@
 import { taskTitleSettingsSchema, shortTaskTitle, roomSchema, paneSchema, userSettingsSchema, userLinkSchema, clipboardItemSchema, taskItemSchema, taskScheduleNextRunAt, artifactSchema, MAX_ROOMS, pickNextAvailableRoomName } from "@space/contracts";
 import { demoHealthSnapshot } from "./demo-health.js";
+import { MEMORY_GRAPH_OVERVIEW_DEFAULT_LIMIT, MEMORY_GRAPH_OVERVIEW_MAX_LIMIT } from "@space/contracts";
+import { createSyntheticMemoryGraph, SYNTHETIC_MEMORY_GRAPH_MAX_NODES } from "../features/memory-workspace/memory-graph-synthetic.js";
 import { defaultUserSettings, canonicalizeUserLinkUrl, cliToggleRuntimeIds, streamingMetricDefinitions, defaultToolRoutingState, buildEffectiveToolPlan, updateToolRoutingSchema, buildDotToolCatalog, dotWorkspacePath, dotUserSettingsFrom, summarizeDotProactiveUsage } from "@space/contracts";
 import type { DotUserSettings, UpdateDotUserSettings } from "@space/contracts";
 import type {
@@ -22,6 +24,7 @@ import type {
   MemoryChangeSet,
   MemoryChangeSetSummary,
   MemoryGraphNode,
+  MemoryGraphNodeDetail,
   MemoryGraphPayload,
   Pane,
   Room,
@@ -227,7 +230,12 @@ export class DemoStore {
   private readonly publicMock: boolean;
   private readonly initialFixture: DemoFixture;
 
-  constructor(initialFixture?: DemoFixture) {
+  /** Size of the synthetic memory graph (`?memoryGraphNodes=`), or null for the fixture graph. */
+  private readonly syntheticMemoryGraphNodes: number | null;
+  private syntheticMemoryNodes: Map<string, MemoryGraphNode> | null = null;
+
+  constructor(initialFixture?: DemoFixture, options: { memoryGraphNodes?: number | null } = {}) {
+    this.syntheticMemoryGraphNodes = options.memoryGraphNodes ? Math.min(Math.max(1, Math.floor(options.memoryGraphNodes)), SYNTHETIC_MEMORY_GRAPH_MAX_NODES) : null;
     this.publicMock = initialFixture !== undefined;
     if (initialFixture) {
       this.fixture = structuredClone(initialFixture);
@@ -666,6 +674,39 @@ export class DemoStore {
       ],
       checkedAt: DEMO_FIXED_AT
     };
+  }
+
+  /** The overview over the synthetic graph: the first `limit` nodes (default 2,000), as the server caps it. */
+  private syntheticMemoryGraphOverview(query: DemoMemoryGraphQuery & { limit?: number }) {
+    const size = this.syntheticMemoryGraphNodes!;
+    const limit = Math.min(Math.max(1, query.limit ?? MEMORY_GRAPH_OVERVIEW_DEFAULT_LIMIT), MEMORY_GRAPH_OVERVIEW_MAX_LIMIT);
+    const needle = query.q?.trim().toLowerCase();
+    const sample = createSyntheticMemoryGraph(size, needle ? size : limit);
+    let nodes = sample.nodes, edges = sample.edges, totalNodes = sample.totalNodes, totalEdges = sample.totalEdges;
+    if (needle) {
+      const matching = nodes.filter(node => node.label.toLowerCase().includes(needle));
+      const ids = new Set(matching.map(node => node.id));
+      const matchingEdges = edges.filter(edge => ids.has(edge.source) && ids.has(edge.target));
+      totalNodes = matching.length; totalEdges = matchingEdges.length;
+      nodes = matching.slice(0, limit);
+      const kept = new Set(nodes.map(node => node.id));
+      edges = matchingEdges.filter(edge => kept.has(edge.source) && kept.has(edge.target)).slice(0, limit * 3);
+    }
+    return {
+      ...structuredClone(this.fixture.memoryWorkspace.graph),
+      summary: { sourceCount: nodes.filter(node => node.type === "SOURCE").length, recordCount: nodes.filter(node => node.type === "MEMORY").length, nodeCount: totalNodes, edgeCount: totalEdges, issueCount: 0 },
+      nodes, edges,
+      totalMatchingNodes: totalNodes, totalMatchingEdges: totalEdges,
+      truncated: nodes.length < totalNodes || edges.length < totalEdges,
+      filters: { q: query.q ?? null, nodeType: null, scope: null, roomId: null, sourcePath: null, lifecycleStatus: null, relationMode: query.relationMode ?? "RELATIONS", month: query.month ?? null }
+    };
+  }
+
+  private syntheticMemoryGraphNode(nodeId: string): MemoryGraphNodeDetail | null {
+    if (!this.syntheticMemoryGraphNodes || !nodeId.includes(":synthetic-")) return null;
+    this.syntheticMemoryNodes ??= new Map(createSyntheticMemoryGraph(this.syntheticMemoryGraphNodes).nodes.map(node => [node.id, node]));
+    const node = this.syntheticMemoryNodes.get(nodeId);
+    return node ? { node: structuredClone(node), record: null, relatedNodes: [], relatedEdges: [], issues: [] } : null;
   }
 
   private memoryGraph(query: DemoMemoryGraphQuery = {}): MemoryGraphPayload {
@@ -1496,6 +1537,7 @@ export class DemoStore {
         });
       }
       case "memoryGraphOverview": {
+        if (this.syntheticMemoryGraphNodes) return Promise.resolve({ data: this.syntheticMemoryGraphOverview((args[0] ?? {}) as DemoMemoryGraphQuery & { limit?: number }) });
         const graph = this.memoryGraph((args[0] ?? {}) as DemoMemoryGraphQuery);
         return Promise.resolve({ data: { ...graph, totalMatchingNodes: graph.nodes.length, totalMatchingEdges: graph.edges.length, truncated: false } });
       }
@@ -1574,6 +1616,8 @@ export class DemoStore {
       }
       case "memoryConsolidation": return Promise.resolve(structuredClone(this.fixture.memoryWorkspace.maintenanceDetail));
       case "memoryGraphNode": {
+        const synthetic = this.syntheticMemoryGraphNode(roomId ?? "");
+        if (synthetic) return Promise.resolve(synthetic);
         const detail = this.fixture.memoryWorkspace.nodeDetails[roomId ?? ""];
         if (!detail) throw new SpaceApiError("Memory node not found.", { status: 404, code: "NOT_FOUND" });
         return Promise.resolve(structuredClone(detail));

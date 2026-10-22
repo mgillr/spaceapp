@@ -1,85 +1,14 @@
 import type { MemoryGraphEdge, MemoryGraphNode } from "@space/contracts";
-import { isMemoryCoreLabel } from "./memory-graph-visuals.js";
+import { createMemoryLayout3D } from "./memory-3d-layout.js";
 export type MemoryPoint3D = { x: number; y: number; z: number };
 export type MemoryCamera3D = { yaw: number; pitch: number; zoom: number };
 export const DEFAULT_MEMORY_CAMERA: MemoryCamera3D = { yaw: 0.3, pitch: -0.15, zoom: 1 };
 
-// Avalanche each seed so the three axes are independent even for similar file IDs.
-const unit = (seed: string) => {
-  let hash = 2166136261;
-  for (const character of seed) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
-  hash = Math.imul(hash ^ (hash >>> 16), 0x7feb352d);
-  hash = Math.imul(hash ^ (hash >>> 15), 0x846ca68b);
-  return ((hash ^ (hash >>> 16)) >>> 0) / 4294967295;
-};
-
 /** Independent XYZ force layout. No coordinates are inherited from the 2D map. */
 export function layoutMemoryNetwork3D(nodes: MemoryGraphNode[], edges: MemoryGraphEdge[]): Map<string, MemoryPoint3D> {
-  const ordered = [...nodes].sort((a, b) => a.id.localeCompare(b.id));
-  const index = new Map(ordered.map((node, i) => [node.id, i]));
-  const root = ordered.findIndex(node => node.type === "SOURCE" && isMemoryCoreLabel(node.label));
-  const count = ordered.length;
-  const points = ordered.map(node => ({
-    x: (unit(`${node.id}:x`) - 0.5) * 260,
-    y: (unit(`${node.id}:y`) - 0.5) * 260,
-    z: (unit(`${node.id}:z`) - 0.5) * 260
-  }));
-  if (root >= 0) points[root] = { x: 0, y: 0, z: 0 };
-  const links = [...edges].sort((a, b) => a.id.localeCompare(b.id)).flatMap(edge => {
-    const a = index.get(edge.source), b = index.get(edge.target);
-    if (a === undefined || b === undefined || a === b) return [];
-    const fileLink = ordered[a]!.type === "SOURCE" && ordered[b]!.type === "SOURCE";
-    return [{ a, b, length: fileLink ? 110 : edge.type === "CONTAINS" ? 34 : 55,
-      strength: fileLink ? 0.035 : edge.type === "CONTAINS" ? 0.028 : 0.004 }];
-  });
-  // Initialize records around their actual file, in a volume rather than a plane.
-  for (const edge of edges) {
-    const a = index.get(edge.source), b = index.get(edge.target);
-    if (edge.type !== "CONTAINS" || a === undefined || b === undefined || ordered[a]!.type !== "SOURCE" || ordered[b]!.type !== "MEMORY") continue;
-    const parent = points[a]!, id = ordered[b]!.id;
-    points[b] = { x: parent.x + (unit(`${id}:dx`) - 0.5) * 70,
-      y: parent.y + (unit(`${id}:dy`) - 0.5) * 70, z: parent.z + (unit(`${id}:dz`) - 0.5) * 70 };
-  }
-  const fx = new Float64Array(count), fy = new Float64Array(count), fz = new Float64Array(count);
-  // Bounded spatial-grid repulsion and link springs act equally on all three axes.
-  for (let step = 0; step < 180; step++) {
-    fx.fill(0); fy.fill(0); fz.fill(0);
-    const grid = new Map<string, number[]>();
-    for (let i = 0; i < count; i++) {
-      const p = points[i]!, key = `${Math.floor(p.x / 32)},${Math.floor(p.y / 32)},${Math.floor(p.z / 32)}`;
-      if (!grid.has(key)) grid.set(key, []);
-      grid.get(key)!.push(i);
-    }
-    for (let i = 0; i < count; i++) {
-      const p = points[i]!, gx = Math.floor(p.x / 32), gy = Math.floor(p.y / 32), gz = Math.floor(p.z / 32);
-      for (let x = gx - 1; x <= gx + 1; x++) for (let y = gy - 1; y <= gy + 1; y++) for (let z = gz - 1; z <= gz + 1; z++) {
-        for (const j of grid.get(`${x},${y},${z}`) ?? []) {
-          if (j <= i) continue;
-          const q = points[j]!, dx = p.x - q.x, dy = p.y - q.y, dz = p.z - q.z;
-          const distanceSquared = Math.max(1, dx * dx + dy * dy + dz * dz);
-          const strength = (ordered[i]!.type === "SOURCE" || ordered[j]!.type === "SOURCE" ? 28 : 12) / distanceSquared;
-          fx[i]! += dx * strength; fy[i]! += dy * strength; fz[i]! += dz * strength;
-          fx[j]! -= dx * strength; fy[j]! -= dy * strength; fz[j]! -= dz * strength;
-        }
-      }
-    }
-    for (const link of links) {
-      const a = points[link.a]!, b = points[link.b]!;
-      const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z, distance = Math.max(0.01, Math.hypot(dx, dy, dz));
-      const spring = (distance - link.length) * link.strength / distance;
-      fx[link.a]! += dx * spring; fy[link.a]! += dy * spring; fz[link.a]! += dz * spring;
-      fx[link.b]! -= dx * spring; fy[link.b]! -= dy * spring; fz[link.b]! -= dz * spring;
-    }
-    const cooling = 1 - step / 230;
-    for (let i = 0; i < count; i++) {
-      if (i === root) continue;
-      const p = points[i]!;
-      const dx = fx[i]! - p.x * 0.0005, dy = fy[i]! - p.y * 0.0005, dz = fz[i]! - p.z * 0.0005;
-      const stepScale = Math.min(1, 4 / Math.max(0.01, Math.hypot(dx, dy, dz))) * cooling;
-      p.x += dx * stepScale; p.y += dy * stepScale; p.z += dz * stepScale;
-    }
-  }
-  return new Map(ordered.map((node, i) => [node.id, points[i]!]));
+  const layout = createMemoryLayout3D(nodes, edges);
+  layout.advance(layout.totalSteps);
+  return new Map(layout.ids.map((id, i) => [id, { x: layout.positions[i * 3]!, y: layout.positions[i * 3 + 1]!, z: layout.positions[i * 3 + 2]! }]));
 }
 
 export function projectMemoryPoint(point: MemoryPoint3D, camera: MemoryCamera3D, scale: number, width: number, height: number) {
@@ -103,3 +32,47 @@ export function memory3DVolumeRatio(points: MemoryPoint3D[]): number {
   const determinant = xx * yy * zz + 2 * xy * xz * yz - xx * yz * yz - yy * xz * xz - zz * xy * xy;
   return Math.max(0, determinant / Math.max(1e-12, ((xx + yy + zz) / 3) ** 3));
 }
+
+/** The same ratio over interleaved coordinates (`stride` numbers per point, x, y, z first). */
+export function memory3DVolumeRatioPacked(values: ArrayLike<number>, count: number, stride = 3): number {
+  if (count < 4) return 0;
+  let cx = 0, cy = 0, cz = 0;
+  for (let i = 0; i < count; i++) { cx += values[i * stride]! / count; cy += values[i * stride + 1]! / count; cz += values[i * stride + 2]! / count; }
+  let xx = 0, yy = 0, zz = 0, xy = 0, xz = 0, yz = 0;
+  for (let i = 0; i < count; i++) {
+    const x = values[i * stride]! - cx, y = values[i * stride + 1]! - cy, z = values[i * stride + 2]! - cz;
+    xx += x * x; yy += y * y; zz += z * z; xy += x * y; xz += x * z; yz += y * z;
+  }
+  const determinant = xx * yy * zz + 2 * xy * xz * yz - xx * yz * yz - yy * xz * xz - zz * xy * xy;
+  return Math.max(0, determinant / Math.max(1e-12, ((xx + yy + zz) / 3) ** 3));
+}
+
+/** Precomputed camera terms, shared by the CPU projection (picking, labels) and the WebGL shader uniforms. */
+export type MemoryProjection = { cosYaw: number; sinYaw: number; cosPitch: number; sinPitch: number; scale: number; zoom: number; width: number; height: number };
+export const memoryProjection = (camera: MemoryCamera3D, scale: number, width: number, height: number): MemoryProjection => ({
+  cosYaw: Math.cos(camera.yaw), sinYaw: Math.sin(camera.yaw), cosPitch: Math.cos(camera.pitch), sinPitch: Math.sin(camera.pitch), scale, zoom: camera.zoom, width, height
+});
+/** Pixels per layout unit: the graph's extent fills 80% of the shorter side, as before. */
+export const memoryGraphScale = (extent: number, width: number, height: number) => Math.min(width, height) * 0.4 / Math.max(60, extent);
+/** Largest distance of any point from the origin, from interleaved coordinates. */
+export function memoryGraphExtent(values: ArrayLike<number>, count: number, stride = 3): number {
+  let max = 0;
+  for (let i = 0; i < count; i++) max = Math.max(max, Math.hypot(values[i * stride]!, values[i * stride + 1]!, values[i * stride + 2]!));
+  return Math.max(60, max);
+}
+/** Same result as `projectMemoryPoint`, written into `out` without allocating. */
+export function projectMemoryPointInto(view: MemoryProjection, px: number, py: number, pz: number, out: { x: number; y: number; z: number; perspective: number }) {
+  const x = px * view.cosYaw + pz * view.sinYaw;
+  const depth = -px * view.sinYaw + pz * view.cosYaw;
+  const y = py * view.cosPitch - depth * view.sinPitch;
+  const z = py * view.sinPitch + depth * view.cosPitch;
+  const perspective = 650 / Math.max(120, 650 + z * view.scale);
+  out.x = view.width / 2 + x * view.scale * view.zoom * perspective;
+  out.y = view.height / 2 - y * view.scale * view.zoom * perspective;
+  out.z = z; out.perspective = perspective;
+  return out;
+}
+export const MEMORY_NODE_ROOT = 2, MEMORY_NODE_SOURCE = 1, MEMORY_NODE_OTHER = 0;
+/** Node radius in CSS pixels: core file 10, files 4.6, records 2.1, scaled by perspective and zoom; focus is 1.5x. */
+export const memoryNodeRadius = (kind: number, perspective: number, zoom: number, focused: boolean) =>
+  Math.max(1, (kind === MEMORY_NODE_ROOT ? 10 : kind === MEMORY_NODE_SOURCE ? 4.6 : 2.1) * perspective * Math.sqrt(zoom)) * (focused ? 1.5 : 1);

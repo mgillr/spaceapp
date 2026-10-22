@@ -1,6 +1,7 @@
 import type { ManagedPlanExecution, StartPlanExecutionRequest, PlanExecutionControlRequest, PlanStageOverrideRequest } from "@space/contracts";
 import type { ClientErrorReport } from "./client-error-reporter.js";
 import type { LiveHistorySnapshot, PersistedLiveTurn } from "./features/live-pane/live-history-sync.js";
+import { memoryGraphOverviewUrl, type MemoryGraphOverviewQuery } from "./features/memory-workspace/memory-graph-overview-url.js";
 import type { LiveRoomContext } from "@space/contracts";
 import type { DesignAsset, DesignBrandKit, DesignBrandKitInput, DesignEvent, DesignFormat, DesignNetwork, DesignPaneMetadata, DesignRequest, DesignRequestCreate, DesignTemplateId, DesignView } from "@space/contracts";
 import type { AppStudioEvent, AppStudioPaneMetadata, AppStudioPreview, AppStudioRunStatus } from "@space/contracts";
@@ -3144,28 +3145,8 @@ export const api = {
     const suffix = params.toString();
     return request<MemoryGraphResponse>(`/api/admin/memory/graph${suffix ? `?${suffix}` : ""}`);
   },
-  memoryGraphOverview: (query: {
-    q?: string;
-    nodeType?: MemoryGraphNodeType;
-    scope?: MemoryEntry["scope"];
-    roomId?: string;
-    sourcePath?: string;
-    lifecycleStatus?: MemoryLifecycleStatus;
-    month?: string;
-    relationMode?: "CLUSTERED" | "RELATIONS";
-  } = {}) => {
-    const params = new URLSearchParams();
-    if (query.q) params.set("q", query.q);
-    if (query.nodeType) params.set("nodeType", query.nodeType);
-    if (query.scope) params.set("scope", query.scope);
-    if (query.roomId) params.set("roomId", query.roomId);
-    if (query.sourcePath) params.set("sourcePath", query.sourcePath);
-    if (query.lifecycleStatus) params.set("lifecycleStatus", query.lifecycleStatus);
-    if (query.month) params.set("month", query.month);
-    if (query.relationMode) params.set("relationMode", query.relationMode);
-    const suffix = params.toString();
-    return request<MemoryGraphOverviewResponse>(`/api/admin/memory/graph/overview${suffix ? `?${suffix}` : ""}`);
-  },
+  memoryGraphOverview: (query: MemoryGraphOverviewQuery = {}) =>
+    request<MemoryGraphOverviewResponse>(memoryGraphOverviewUrl(query)),
   memoryCalendar: (query: MemoryCalendarQuery = {}) => {
     const params = new URLSearchParams();
     if (query.year) params.set("year", String(query.year));

@@ -1,5 +1,6 @@
 import type { PlatformGateway, SpaceRuntime } from "../runtime/SpaceRuntime.js";
 import { DEMO_LOCAL_REPLY, DemoStore } from "./DemoStore.js";
+import { syntheticMemoryGraphSize } from "../features/memory-workspace/memory-graph-synthetic.js";
 import type { DemoFixture } from "./demo-fixture.js";
 import { MockBrowserSocket } from "./mock-browser-socket.js";
 import { handleCliMockInput } from "./mock-cli-transcripts.js";
@@ -138,8 +139,9 @@ class LocalTerminalSocket extends EventTarget {
   }
 }
 
-export function createDemoRuntime(options: { fixture?: DemoFixture; localStorage?: Storage; sessionStorage?: Storage } = {}): { runtime: SpaceRuntime; store: DemoStore } {
-  const store = new DemoStore(options.fixture);
+export function createDemoRuntime(options: { fixture?: DemoFixture; localStorage?: Storage; sessionStorage?: Storage; memoryGraphNodes?: number | null } = {}): { runtime: SpaceRuntime; store: DemoStore } {
+  const memoryGraphNodes = options.memoryGraphNodes !== undefined ? options.memoryGraphNodes : syntheticMemoryGraphSize(globalThis.location?.search ?? "");
+  const store = new DemoStore(options.fixture, { memoryGraphNodes });
   const localStorage = options.localStorage ?? new MemoryStorage();
   const sessionStorage = options.sessionStorage ?? new MemoryStorage();
   if (!options.localStorage) resetDemoStorage(localStorage, sessionStorage);
