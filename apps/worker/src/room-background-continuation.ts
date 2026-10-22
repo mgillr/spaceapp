@@ -66,6 +66,11 @@ export function continuedRunTraceparent(source: RoomAgentSupervisorQueueItem["tu
   return formatTraceparent(parsed.traceId, workflowRunSpanId({ workflowId: buildCodexAppServerTurnWorkflowId(source) }), parsed.flags);
 }
 
+/**
+ * Prepares the next background continuation of a Room Agent mission, or says
+ * why there is none (WAITING or DONE, including the continuation and token
+ * limits). The new turn carries a link to the turn run it continues.
+ */
 export async function prepareBackgroundContinuation(input: {
   roomId: string; missionId: string; continuationId: string;
 }, store: SpaceStore, maxContinuations = DEFAULT_ROOM_AGENT_MAX_CONTINUATIONS,

@@ -13,6 +13,7 @@ let env: TestWorkflowEnvironment;
 let collector: FakeCollector;
 let ids: ScenarioIds;
 let spans: CollectedSpan[];
+/** Restores worker logging; replaced in beforeAll. */
 let restoreLogs: () => void = () => undefined;
 
 beforeAll(async () => {
@@ -29,8 +30,11 @@ afterAll(async () => {
   await env?.teardown();
 });
 
+/** Workflow spans exported for `workflowId` (one per run). */
 const workflowSpans = (workflowId: string) => spans.filter((span) => span.name.startsWith("workflow ") && attr(span, "space.workflow_id") === workflowId);
+/** Spans whose parent is `parent`, in the same trace. */
 const childrenOf = (parent: CollectedSpan) => spans.filter((span) => span.traceId === parent.traceId && span.parentSpanId === parent.spanId);
+/** The one span in `list`; fails the test otherwise. */
 const only = (list: CollectedSpan[]) => {
   expect(list).toHaveLength(1);
   return list[0]!;

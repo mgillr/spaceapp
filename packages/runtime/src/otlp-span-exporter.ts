@@ -79,14 +79,17 @@ function attributeValue(value: string | number) {
   return typeof value === "number" && Number.isInteger(value) ? { intValue: String(value) } : { stringValue: String(value) };
 }
 
+/** Span attributes as OTLP key/value pairs. */
 function otlpAttributes(attributes: Readonly<Record<string, string | number>>) {
   return Object.entries(attributes).map(([key, value]) => ({ key, value: attributeValue(value) }));
 }
 
+/** True when a link names a well-formed trace id and span id. */
 function validLink(link: SpanLink): boolean {
   return traceIdPattern.test(link.traceId) && spanIdPattern.test(link.spanId);
 }
 
+/** OTLP/HTTP JSON export request for `spans` from one service; invalid links are dropped. */
 export function otlpTraceRequest(spans: readonly ServerSpan[], serviceName: string) {
   return {
     resourceSpans: [{
@@ -114,6 +117,12 @@ export function otlpTraceRequest(spans: readonly ServerSpan[], serviceName: stri
   };
 }
 
+/**
+ * A bounded, best-effort OTLP/HTTP span exporter shared by the API and the
+ * workers. Spans wait in a queue that drops and counts spans when full, are sent
+ * in batches on an interval or when a batch fills, and each POST is bounded by
+ * `timeoutMs`, so a slow or failing collector never blocks the caller.
+ */
 export function createOtlpSpanExporter(options: OtlpSpanExporterOptions): SpanExporter {
   const url = otlpTracesUrl(options.endpoint);
   if (!url) throw new Error("Invalid OTLP endpoint.");
@@ -125,6 +134,7 @@ export function createOtlpSpanExporter(options: OtlpSpanExporterOptions): SpanEx
   const stats: SpanExporterStats = { exported: 0, dropped: 0, failed: 0 };
   let inFlight: Promise<void> | null = null;
 
+  /** Sends one batch from the queue and counts it as exported or failed. */
   const flushOnce = async () => {
     const batch = queue.splice(0, batchSize);
     if (!batch.length) return;
@@ -150,6 +160,7 @@ export function createOtlpSpanExporter(options: OtlpSpanExporterOptions): SpanEx
       stats.failed += batch.length;
     }
   };
+  /** Sends batches until the queue is empty; concurrent calls share one run. */
   const flush = (): Promise<void> => {
     if (inFlight) return inFlight;
     // An empty queue must not leave a settled promise behind as "in flight":
@@ -170,6 +181,7 @@ export function createOtlpSpanExporter(options: OtlpSpanExporterOptions): SpanEx
   timer.unref?.();
 
   return {
+    /** Queues a span with valid ids; drops and counts it when the queue is full. */
     record(span) {
       if (!traceIdPattern.test(span.traceId) || !spanIdPattern.test(span.spanId)) return;
       if (queue.length >= maxQueue) {
@@ -180,6 +192,7 @@ export function createOtlpSpanExporter(options: OtlpSpanExporterOptions): SpanEx
       if (queue.length >= batchSize) void flush();
     },
     flush,
+    /** Stops the interval and sends everything still queued or in flight. */
     async close() {
       clearInterval(timer);
       // A span recorded while a flush is in flight is sent by the next round.

@@ -15,6 +15,7 @@ import { workerTracingOptions } from "../../src/worker-tracing.js";
 try { Runtime.install({ logger: new DefaultLogger("ERROR") }); } catch { /* already installed in this process */ }
 
 const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
+/** Absolute path of a worker source module, such as a workflow file. */
 export const workerSource = (name: string) => fileURLToPath(new URL(`../../src/${name}`, import.meta.url));
 
 /** Bundle @space/* from packages/<name>/src, as the source-tree worker does. */
@@ -94,6 +95,7 @@ export async function startFakeCollector(mode: CollectorMode = "ok"): Promise<Fa
   return collector;
 }
 
+/** The value of attribute `key` on a collected span (integers as numbers). */
 export const attr = (span: { attributes: OtlpAttribute[] }, key: string): string | number | undefined => {
   const value = span.attributes.find((attribute) => attribute.key === key)?.value;
   if (!value) return undefined;
@@ -138,6 +140,7 @@ export async function tracedWorker(env: TestWorkflowEnvironment, options: {
 export async function runTraced<T>(workers: TracedWorker[], body: () => Promise<T>): Promise<T> {
   let result!: T;
   const pending = [...workers];
+  /** Runs worker `index` until the remaining workers and `body` finish. */
   const run = async (index: number): Promise<void> => {
     const current = pending[index];
     if (!current) {

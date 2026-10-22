@@ -39,6 +39,11 @@ function isAlreadyStarted(error: unknown): boolean {
   return error instanceof Error && error.name === "WorkflowExecutionAlreadyStartedError";
 }
 
+/**
+ * Starts the memory mutation workflow for a change set, or reports
+ * ALREADY_SCHEDULED when it already runs. The memo carries the request's
+ * traceparent when it is known, so the workflow span joins the request's trace.
+ */
 export async function scheduleMemoryMutation(
   rawInput: MemoryMutationWorkflowInput,
   startWorkflow: MemoryMutationWorkflowStarter,

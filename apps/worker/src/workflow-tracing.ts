@@ -58,6 +58,7 @@ export interface WorkflowTracingSinks extends Sinks {
 
 type Headers = WorkflowExecuteInput["headers"];
 
+/** The traceparent in Temporal header `name`, or null when it is missing or invalid. */
 function headerTraceparent(headers: Headers, name: string): ParsedTraceparent | null {
   const payload = headers?.[name];
   if (!payload) return null;
@@ -68,6 +69,7 @@ function headerTraceparent(headers: Headers, name: string): ParsedTraceparent | 
   }
 }
 
+/** A copy of `input` with the given Temporal headers set. */
 function withTraceparent<T extends { headers: Headers }>(input: T, values: Record<string, string>): T {
   const headers = { ...input.headers };
   for (const [name, value] of Object.entries(values)) headers[name] = defaultPayloadConverter.toPayload(value);
@@ -77,8 +79,13 @@ function withTraceparent<T extends { headers: Headers }>(input: T, values: Recor
 const identifierPattern = /^[A-Za-z0-9:._-]{1,200}$/;
 const correlationKeys = { traceId: "space.trace_id", roomId: "space.room_id", paneId: "space.pane_id", roomAgentMissionId: "space.mission_id", missionId: "space.mission_id", agentRunId: "space.agent_run_id", goalId: "space.goal_id" } as const;
 
+/**
+ * Identifier fields from the workflow input (top level and two known nesting
+ * levels), mapped to span attribute names. Values must look like identifiers.
+ */
 function correlationOf(args: readonly unknown[]): Record<string, string> {
   const correlation: Record<string, string> = {};
+  /** Collects identifiers from one input object and its known nested inputs. */
   const visit = (value: unknown, depth: number) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return;
     const record = value as Record<string, unknown>;
@@ -96,6 +103,10 @@ function correlationOf(args: readonly unknown[]): Record<string, string> {
   return correlation;
 }
 
+/**
+ * Stable reason code for a failed run: WORKFLOW_TIMEOUT, the innermost safe
+ * failure type in the cause chain, or WORKFLOW_FAILED.
+ */
 function failureCode(error: unknown): string {
   let code = "WORKFLOW_FAILED";
   let failure = error as { name?: unknown; type?: unknown; cause?: unknown } | undefined;
@@ -106,11 +117,20 @@ function failureCode(error: unknown): string {
   return code;
 }
 
+/**
+ * Workflow interceptors loaded through `workflowModules`: the inbound one
+ * exports one span per run, the outbound one puts the run's span into the
+ * headers of activities, child workflows and the next run.
+ */
 export const interceptors: WorkflowInterceptorsFactory = () => {
   const { spaceTracing } = proxySinks<WorkflowTracingSinks>();
   let run: WorkflowRunTrace | null = null;
 
   const inbound: WorkflowInboundCallsInterceptor = {
+    /**
+     * Resolves the run's place in the trace, runs the workflow and sends the run's
+     * span with its outcome to the sink, however the run ends.
+     */
     async execute(input: WorkflowExecuteInput, next: Next<WorkflowInboundCallsInterceptor, "execute">) {
       const info = workflowInfo();
       const memo = info.memo as Record<string, unknown> | undefined;
@@ -130,6 +150,7 @@ export const interceptors: WorkflowInterceptorsFactory = () => {
         memo: parseTraceparent(memo?.traceparent)
       });
       const reasons = new Map<string, string>();
+      /** Lookup key of the span a traceparent names. */
       const key = (parsed: ParsedTraceparent | null) => parsed ? `${parsed.traceId}:${parsed.parentId}` : "";
       if (args && header) reasons.set(key(header), "PARENT_WORKFLOW");
       if (linkHeader) reasons.set(key(linkHeader), "CONTINUE_AS_NEW");
@@ -164,6 +185,7 @@ export const interceptors: WorkflowInterceptorsFactory = () => {
     }
   };
 
+  /** `input` with this run's span as its traceparent header, once the run is known. */
   const underThisRun = <T extends { headers: Headers }>(input: T): T =>
     run ? withTraceparent(input, { [TRACEPARENT_HEADER]: traceparentOf(run) }) : input;
 
@@ -171,6 +193,7 @@ export const interceptors: WorkflowInterceptorsFactory = () => {
     scheduleActivity: (input: ActivityInput, next) => next(underThisRun(input)),
     scheduleLocalActivity: (input: LocalActivityInput, next) => next(underThisRun(input)),
     startChildWorkflowExecution: (input: StartChildWorkflowExecutionInput, next) => next(underThisRun(input)),
+    /** The next run takes this run's parent (this run itself at a trace root) and links to this run. */
     continueAsNew(input: ContinueAsNewInput, next) {
       if (!run) return next(input);
       // The next run keeps this run's place in the trace and links back to it.

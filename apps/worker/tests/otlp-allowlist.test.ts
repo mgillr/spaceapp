@@ -10,6 +10,7 @@ import { startFakeCollector, type FakeCollector } from "./support/otlp-temporal.
 
 let env: TestWorkflowEnvironment;
 let collector: FakeCollector;
+/** Restores worker logging; replaced in beforeAll. */
 let restoreLogs: () => void = () => undefined;
 
 beforeAll(async () => {

@@ -181,6 +181,12 @@ const spanCorrelationKeys: Readonly<Record<string, string>> = {
   goalId: "space.goal_id"
 };
 
+/**
+ * Runs one activity attempt with its log records, metrics and, when spans are
+ * exported, one OTLP span under the workflow span from the Temporal header (or
+ * the traceparent in the input). Export is best effort: it never changes the
+ * activity's result or error.
+ */
 export async function observeActivityExecution<T>(
   info: ActivityInfo,
   args: readonly unknown[],
@@ -218,6 +224,7 @@ export async function observeActivityExecution<T>(
     traceparent: parent && spanId ? formatTraceparent(parent.traceId, spanId, parent.flags) : null
   };
 
+  /** Records the attempt's outcome once: metrics, the finished log record and the attempt's span. */
   const finish = (outcome: ActivityOutcome, reasonCode: string | null, errorName: string | null) => {
     const durationMs = Math.max(0, now() - startedAt);
     metrics.activitiesInFlight.inc(labels, -1);

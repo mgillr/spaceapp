@@ -327,6 +327,12 @@ function bridgeMessage(status: "BLOCKED" | "FAILED", reason: string): string {
   return `Space room action bridge result:\n- ${status} reason=${redactMemoryText(reason).slice(0, 700)}`;
 }
 
+/**
+ * Runs the room actions requested in an assistant reply through the internal
+ * API and returns the cleaned reply and the tool message. The internal request
+ * carries this activity attempt's span as its traceparent when spans are
+ * exported.
+ */
 export async function executeRoomActionBridge(input: {
   turnInput: DummyTurnInput;
   assistantContent: string;

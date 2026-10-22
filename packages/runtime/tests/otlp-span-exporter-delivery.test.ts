@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOtlpSpanExporter, otlpTraceRequest, type ServerSpan, type SpanExporter } from "../src/otlp-span-exporter.js";
 
 const traceId = "4bf92f3577b34da6a3ce929d0e0e4736";
+/** A valid test span with the given span id. */
 const span = (spanId: string, overrides: Partial<ServerSpan> = {}): ServerSpan => ({
   traceId, spanId, parentSpanId: "00f067aa0ba902b7", name: "workflow probe",
   startTimeUnixNano: 1n, endTimeUnixNano: 2n, attributes: { "space.outcome": "COMPLETED" }, error: false, kind: 1, ...overrides
@@ -9,6 +10,7 @@ const span = (spanId: string, overrides: Partial<ServerSpan> = {}): ServerSpan =
 
 const exporters: SpanExporter[] = [];
 afterEach(async () => { await Promise.all(exporters.splice(0).map((exporter) => exporter.close())); });
+/** An exporter on a fake transport, closed after each test. */
 function exporter(fetchImpl: (...args: never[]) => Promise<{ ok: boolean }>, options: { timeoutMs?: number } = {}) {
   const created = createOtlpSpanExporter({ endpoint: "http://127.0.0.1:4318", serviceName: "space-worker", fetch: fetchImpl as never, flushIntervalMs: 60_000, ...options });
   exporters.push(created);

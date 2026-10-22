@@ -15,6 +15,7 @@ export function createWorkflowTracingSinks(spans: SpanExporter, now: () => numbe
     spaceTracing: {
       workflowRun: {
         callDuringReplay: false,
+        /** Queues the finished workflow run's span; never throws into the workflow. */
         fn(info, span) {
           try {
             const startedAt = info.runStartTime.getTime();

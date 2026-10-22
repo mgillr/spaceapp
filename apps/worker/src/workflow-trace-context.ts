@@ -12,6 +12,7 @@ export const TRACEPARENT_HEADER = "space-traceparent";
 /** Temporal header naming a span the next run links to (continue-as-new). */
 export const TRACE_LINK_HEADER = "space-tracelink";
 
+/** 32-bit FNV-1a hash of `text` from `seed`: deterministic and sandbox-safe. */
 function fnv1a32(text: string, seed: number): number {
   let hash = seed >>> 0;
   for (let index = 0; index < text.length; index++) {
@@ -21,6 +22,7 @@ function fnv1a32(text: string, seed: number): number {
   return hash >>> 0;
 }
 
+/** A `words` x 8 hex-digit id derived from `text`, never all zeros. */
 function derivedHex(text: string, words: number): string {
   let value = "";
   for (let word = 0; word < words; word++) {
@@ -58,6 +60,7 @@ export function activityAttemptSpanId(workflowRunId: string, activityId: string,
 
 const nestedKeys = ["turn", "item", "bridge", "input", "turnInput"] as const;
 
+/** The string at `key` in `value` or in its known nested inputs, up to `depth` levels down. */
 function findString(value: unknown, key: string, depth: number): string | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
@@ -108,6 +111,7 @@ export interface WorkflowRunTraceSources {
   memo?: ParsedTraceparent | null;
 }
 
+/** The span a parsed traceparent names. */
 const ref = (parsed: ParsedTraceparent): SpanContextRef => ({ traceId: parsed.traceId, spanId: parsed.parentId });
 
 /**
@@ -121,6 +125,7 @@ export function resolveWorkflowRunTrace(sources: WorkflowRunTraceSources): Workf
   const spanId = workflowRunSpanId(sources);
   const parent = sources.args ?? sources.header ?? sources.memo ?? null;
   const links: SpanContextRef[] = [];
+  /** Adds a link once, skipping this run's own span. */
   const addLink = (parsed: ParsedTraceparent | null | undefined) => {
     if (!parsed) return;
     const link = ref(parsed);
@@ -138,6 +143,7 @@ export function resolveWorkflowRunTrace(sources: WorkflowRunTraceSources): Workf
   };
 }
 
+/** W3C traceparent naming `context` as the parent span. */
 export function traceparentOf(context: SpanContextRef): string {
   return formatTraceparent(context.traceId, context.spanId);
 }

@@ -16,10 +16,12 @@ import { bundlerOptions, startFakeCollector, tracedWorker, runTraced, workerSour
 let env: TestWorkflowEnvironment;
 let collector: FakeCollector;
 let ids: ScenarioIds;
+/** Restores worker logging; replaced in beforeAll. */
 let restoreLogs: () => void = () => undefined;
 const histories: Record<string, WorkflowHistory> = {};
 let untracedHistory: WorkflowHistory;
 
+/** An exporter that keeps every recorded span in memory, to count replay output. */
 function recordingExporter() {
   const recorded: ServerSpan[] = [];
   const exporter: SpanExporter = {
@@ -54,6 +56,7 @@ afterAll(async () => {
   await env?.teardown();
 });
 
+/** The workflow module that runs `workflowId`. */
 const workflowsFor = (workflowId: string) => workflowId.startsWith("memory-") ? "memory-maintenance-workflows.ts" : "workflows.ts";
 
 describe("workflow tracing and replay", () => {

@@ -213,6 +213,11 @@ export class TemporalRoomAgentWorkflowCoordinator implements RoomAgentWorkflowCo
     } finally { await lease.close(); }
   }
 
+  /**
+   * Signals the room's supervisor workflow with a queued turn, starting it if
+   * needed. The turn carries the request's traceparent, and the correlation memo
+   * is applied only when this signal starts the supervisor run.
+   */
   async enqueue(rawItem: RoomAgentSupervisorQueueItem): Promise<{ workflowId: string; runId: string | null }> {
     const parsed = roomAgentSupervisorQueueItemSchema.parse(rawItem);
     // The queued turn carries the originating request's W3C trace context to

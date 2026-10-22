@@ -13,6 +13,7 @@ import { apiTraceparent, runTracedScenarios } from "./support/otlp-scenarios.js"
 import { startFakeCollector } from "./support/otlp-temporal.js";
 
 let env: TestWorkflowEnvironment;
+/** Restores worker logging; replaced in beforeAll. */
 let restoreLogs: () => void = () => undefined;
 
 beforeAll(async () => {

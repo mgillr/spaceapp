@@ -37,6 +37,7 @@ export const workerSpanAttributeAllowlist: Readonly<Record<string, AttributeKind
 // Same shape as worker log identifiers, minus "/" so a path can never pass as an id.
 const idPattern = /^[A-Za-z0-9:._-]{1,200}$/;
 
+/** True when `value` is valid for its attribute kind; ids never look like a URL or a path. */
 function allowed(kind: AttributeKind, value: unknown): value is string | number {
   switch (kind) {
     case "id":

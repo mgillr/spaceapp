@@ -36,6 +36,7 @@ export const turn: DummyTurnInput = {
   collaborationMode: "default"
 } as DummyTurnInput;
 
+/** The correlation memo the API sets when it starts a workflow for a request. */
 const apiMemo = (traceId: string) => ({ spaceTraceId: traceId, traceparent: apiTraceparent, w3cTraceId: apiTraceId });
 
 export interface ScenarioIds {
@@ -48,6 +49,11 @@ export interface ScenarioIds {
   actionWorkflowId: string;
 }
 
+/**
+ * Stub activities for the three workers. The turn activity fails its first
+ * attempt with a stable code and a message full of seeded user data; the Dots
+ * Goal step waits once so the Goal continues as new.
+ */
 function activities() {
   let firstDotGoalRun: string | null = null;
   const main = {
@@ -101,6 +107,7 @@ export interface ScenarioOptions {
  */
 export async function runTracedScenarios(env: TestWorkflowEnvironment, options: ScenarioOptions): Promise<ScenarioIds> {
   const stubs = activities();
+  /** True when the scenario `name` is selected (all of them without `only`). */
   const want = (name: keyof ScenarioIds) => !options.only || options.only.includes(name);
   const workers = [
     await tracedWorker(env, { collectorUrl: options.collector.url, service: "space-worker", taskQueue: DEFAULT_TASK_QUEUE,

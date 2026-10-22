@@ -1,6 +1,11 @@
 import { buildCodexAppServerTurnWorkflowId, roomAgentSupervisorQueueItemSchema } from "@space/contracts";
 import { InMemorySpaceStore } from "@space/runtime";
 
+/**
+ * An in-memory store with a running Room Agent mission whose first turn has
+ * completed after one settled action. `initialTurn` overrides fields of that
+ * first turn (for example its traceparent).
+ */
 export function continuationFixture(actionType: "OPEN_TYPES" | "CONFIGURE_PANE" = "OPEN_TYPES", initialTurn: Record<string, unknown> = {}) {
   const store = new InMemorySpaceStore();
   const room = store.createRoom({ name: "Continuation regression", initialPaneCount: 0 });
@@ -8,6 +13,7 @@ export function continuationFixture(actionType: "OPEN_TYPES" | "CONFIGURE_PANE" 
   const session = store.createSpaceAgentSession({ paneId: pane.id, roomId: room.id, title: "Room Agent",
     selectedProviderId: null, selectedModelId: null, selectedModelConfigId: null,
     selectedProviderName: null, selectedModelName: null, selectedReasoningKey: null });
+  /** Queues one mission turn; `turn` overrides fields of the queued turn. */
   function enqueue(suffix: string, prompt = "Open CLI and Chat, then send a story to both.", turn: Record<string, unknown> = {}) {
     const item = roomAgentSupervisorQueueItemSchema.parse({ missionId: "mission:continuation", turn: {
       roomId: room.id, paneId: pane.id, prompt, roomAgentOperatorRequest: prompt,

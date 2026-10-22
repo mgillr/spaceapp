@@ -22,6 +22,7 @@ const turnWorkflowId = buildCodexAppServerTurnWorkflowId(missionTurn);
 let env: TestWorkflowEnvironment;
 let collector: FakeCollector;
 let spans: CollectedSpan[];
+/** Restores worker logging; replaced in beforeAll. */
 let restoreLogs: () => void = () => undefined;
 
 beforeAll(async () => {
@@ -66,11 +67,13 @@ afterAll(async () => {
   await env?.teardown();
 });
 
+/** The single workflow span exported for `workflowId`. */
 const workflowSpan = (workflowId: string) => {
   const list = spans.filter((span) => span.name.startsWith("workflow ") && attr(span, "space.workflow_id") === workflowId);
   expect(list).toHaveLength(1);
   return list[0]!;
 };
+/** Spans whose parent is `parent`, in the same trace. */
 const childrenOf = (parent: CollectedSpan) => spans.filter((span) => span.traceId === parent.traceId && span.parentSpanId === parent.spanId);
 
 describe("worker OTLP spans for a supervised Room Agent mission", () => {
