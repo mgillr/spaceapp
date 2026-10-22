@@ -2,16 +2,19 @@
 export const MEMORY_3D_BENCH_PARAM = "memory3dBench";
 
 export type Memory3DBenchController = {
-  /** Rotates and zooms the camera, then draws one frame synchronously. */
-  frame: (yaw: number, pitch: number, zoom: number) => void;
+  /**
+   * Rotates and zooms the camera and draws one frame. When a render worker draws it, the returned
+   * promise resolves once the worker has drawn that frame.
+   */
+  frame: (yaw: number, pitch: number, zoom: number) => void | Promise<void>;
   /** Hit-tests one point (rebuilding the index when the camera moved); returns elapsed ms. */
   pick: (x: number, y: number) => number;
   size: () => { width: number; height: number };
-  info: () => { nodes: number; edges: number; renderer: string };
+  info: () => { nodes: number; edges: number; renderer: string; renderThread?: "main" | "worker" };
 };
 
 export type Memory3DBenchResult = {
-  nodes: number; edges: number; renderer: string; userAgent: string; gpu: string | null;
+  nodes: number; edges: number; renderer: string; renderThread?: "main" | "worker"; userAgent: string; gpu: string | null;
   frames: number; frameMs: { p50: number; p95: number; max: number };
   /** Main-thread time spent preparing and submitting each frame (camera, pick index, draw calls, labels). */
   frameWorkMs: { p50: number; p95: number; max: number };
@@ -38,7 +41,9 @@ export function observeLongTasks(): { entries: Array<{ start: number; duration: 
 
 /**
  * Rotates a full turn while zooming between 0.6x and 2.5x for `frames` animation frames, timing
- * each frame (requestAnimationFrame to requestAnimationFrame) and one hover pick per frame.
+ * each frame and one hover pick per frame. A frame's time runs from one animation frame to the
+ * next; when a render worker draws, it runs until the worker has drawn the frame, so the GPU time
+ * is counted even though the main thread does not wait for it.
  */
 export async function runMemory3DBench(controller: Memory3DBenchController, longTasks: { entries: Array<{ start: number; duration: number }> }, options: { frames?: number; gpu?: string | null; loadStartedAt?: number } = {}): Promise<Memory3DBenchResult> {
   const frames = options.frames ?? 600;
@@ -53,12 +58,13 @@ export async function runMemory3DBench(controller: Memory3DBenchController, long
       if (index >= frames) { resolve(); return; }
       const t = index / frames;
       const workStarted = performance.now();
-      controller.frame(0.3 + t * Math.PI * 2, -0.15 + Math.sin(t * Math.PI * 4) * 0.3, 1.55 + Math.sin(t * Math.PI * 6) * 0.95);
+      const drawn = controller.frame(0.3 + t * Math.PI * 2, -0.15 + Math.sin(t * Math.PI * 4) * 0.3, 1.55 + Math.sin(t * Math.PI * 6) * 0.95);
       workTimes.push(performance.now() - workStarted);
       const { width, height } = controller.size();
       pickTimes.push(controller.pick(width * (0.25 + 0.5 * ((index * 37) % 101) / 100), height * (0.25 + 0.5 * ((index * 53) % 97) / 96)));
       index++;
-      requestAnimationFrame(tick);
+      if (drawn) void drawn.then(() => tick(performance.now()));
+      else requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
   });

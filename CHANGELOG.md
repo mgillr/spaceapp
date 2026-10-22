@@ -8,7 +8,9 @@ Semantic Versioning.
 ### Memory workspace
 
 - The 3D memory graph renders with WebGL2: instanced nodes, one batched edge
-  draw and GPU depth instead of a per-frame CPU sort. Hover and click use a
+  draw and GPU depth instead of a per-frame CPU sort. Where the browser can
+  transfer a canvas to a worker (OffscreenCanvas), drawing runs in a render
+  worker so the main thread never waits for the GPU. Hover and click use a
   screen-space grid index, and labels use level-of-detail with a fixed
   per-frame budget. Without WebGL2, or after a lost context, the view falls
   back to Canvas 2D with the 2,000-node sample and switches back when the

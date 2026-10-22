@@ -5,6 +5,29 @@ export const MEMORY_GL_TEXTURE_WIDTH = 2048;
 
 export type MemoryGLGraph = { count: number; kinds: Uint8Array; colors: Uint8Array; edgeCount: number; edgeNodes: Uint32Array; edgeKinds: Uint8Array };
 
+/**
+ * What the 3D view draws through: the WebGL2 renderer on this thread (`MemoryGraphGL`) or the same
+ * renderer in a worker that owns the canvas (`MemoryGraphGLWorker`), so GPU work never blocks the
+ * main thread.
+ */
+export interface MemoryGraphRenderer {
+  readonly lost: boolean;
+  setGraph(graph: MemoryGLGraph): void;
+  setPositions(positions: Float32Array): void;
+  setState(state: Uint8Array): void;
+  draw(view: MemoryProjection, devicePixelRatio: number, extent: number, hasFocus: boolean): void;
+  /** Sets the drawing buffer size in device pixels. */
+  resize(width: number, height: number): void;
+  restore(): void;
+  dispose(): void;
+  /** Name of the GPU (or software renderer) behind the context, when the browser reports it. */
+  gpu(): string | null;
+}
+
+/** Only the arrays the renderer needs, so the worker is not sent labels and ids. */
+export const memoryGLGraph = (graph: MemoryGLGraph): MemoryGLGraph =>
+  ({ count: graph.count, kinds: graph.kinds, colors: graph.colors, edgeCount: graph.edgeCount, edgeNodes: graph.edgeNodes, edgeKinds: graph.edgeKinds });
+
 const PROJECT = `
 uniform highp sampler2D uPositions;
 uniform highp usampler2D uState;
@@ -123,7 +146,7 @@ const UNIFORMS = ["uPositions", "uState", "uCamera", "uView", "uDepthRange", "uH
  * uploads one texture instead of rebuilding geometry. All resources can be recreated after a
  * context loss with `restore()`.
  */
-export class MemoryGraphGL {
+export class MemoryGraphGL implements MemoryGraphRenderer {
   readonly gl: WebGL2RenderingContext;
   private nodes!: Program;
   private edges!: Program;
@@ -137,9 +160,10 @@ export class MemoryGraphGL {
   private state: Uint8Array | null = null;
   private rows = 1;
 
-  static create(canvas: HTMLCanvasElement): MemoryGraphGL | null {
+  /** Works on a page canvas and on an OffscreenCanvas in a worker; null without WebGL2. */
+  static create(canvas: HTMLCanvasElement | OffscreenCanvas): MemoryGraphGL | null {
     let gl: WebGL2RenderingContext | null;
-    try { gl = canvas.getContext("webgl2", { antialias: true, alpha: true, premultipliedAlpha: false, preserveDrawingBuffer: false }); } catch { gl = null; }
+    try { gl = (canvas as HTMLCanvasElement).getContext("webgl2", { antialias: true, alpha: true, premultipliedAlpha: false, preserveDrawingBuffer: false }); } catch { gl = null; }
     if (!gl || typeof gl.texImage2D !== "function") return null;
     try { return new MemoryGraphGL(gl); } catch { return null; }
   }
@@ -236,6 +260,17 @@ export class MemoryGraphGL {
     gl.bindTexture(gl.TEXTURE_2D, this.stateTexture);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, MEMORY_GL_TEXTURE_WIDTH, this.rows, gl.RED_INTEGER, gl.UNSIGNED_BYTE, padded);
+  }
+
+  resize(width: number, height: number) {
+    const canvas = this.gl.canvas;
+    canvas.width = width; canvas.height = height;
+  }
+
+  gpu(): string | null {
+    if (this.gl.isContextLost()) return null;
+    const info = this.gl.getExtension("WEBGL_debug_renderer_info");
+    return info ? String(this.gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : String(this.gl.getParameter(this.gl.RENDERER));
   }
 
   draw(view: MemoryProjection, devicePixelRatio: number, extent: number, hasFocus: boolean) {

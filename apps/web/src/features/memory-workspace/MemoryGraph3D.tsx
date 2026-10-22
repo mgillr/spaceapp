@@ -3,7 +3,8 @@ import { DEFAULT_MEMORY_CAMERA, MEMORY_NODE_ROOT, memoryGraphScale, memoryNodeRa
 import { MEMORY_3D_BENCH_PARAM, observeLongTasks, runMemory3DBench, type Memory3DBenchResult } from "./memory-3d-bench.js";
 import { MEMORY_3D_LABEL_CANDIDATES, MEMORY_3D_RECORD_LABEL_ZOOM, selectMemoryLabels } from "./memory-3d-labels.js";
 import { MemoryPickIndex } from "./memory-3d-picking.js";
-import { MemoryGraphGL } from "./memory-3d-webgl.js";
+import { canRenderInWorker, MemoryGraphGLWorker } from "./memory-3d-render-client.js";
+import { MemoryGraphGL, type MemoryGraphRenderer } from "./memory-3d-webgl.js";
 import { memoryFocusState, type MemoryGraph3DData } from "./memory-graph-3d-data.js";
 import type { MemoryGraph3DMessage, MemoryGraph3DSource, MemoryGraph3DTotals } from "./memory-graph-3d-job.js";
 
@@ -67,7 +68,20 @@ export function MemoryGraph3D({ source, showTitles, selectedNodeId, onSelectNode
     if (!canvas || !overlay) return;
     let context: CanvasRenderingContext2D | null = null;
     try { context = overlay.getContext("2d"); } catch { context = null; }
-    let gl = MemoryGraphGL.create(canvas);
+    // Where the browser allows it, the canvas goes to a render worker, so the main thread never
+    // waits for the GPU; otherwise WebGL2 runs here, and without either the view uses Canvas 2D.
+    const switchTo = (next: Renderer) => { mode = next; uploaded = { graph: null, positions: null }; setRenderer(mode); pickDirty = true; schedule(); };
+    // The worker gets its own canvas under the interactive one (a canvas can be transferred only
+    // once, and the interactive canvas keeps focus, input and its attributes).
+    let surface: HTMLCanvasElement | null = canRenderInWorker(canvas) ? document.createElement("canvas") : null;
+    if (surface) { surface.className = "memory-3d-gpu"; surface.setAttribute("aria-hidden", "true"); canvas.before(surface); }
+    const offThread = !surface ? null : MemoryGraphGLWorker.create(surface, {
+      ready: ok => switchTo(ok ? "webgl2" : "canvas2d"),
+      lost: () => switchTo("canvas2d"),
+      restored: ok => switchTo(ok ? "webgl2" : "canvas2d")
+    });
+    if (surface && !offThread) { surface.remove(); surface = null; }
+    let gl: MemoryGraphRenderer | null = offThread ?? MemoryGraphGL.create(canvas);
     let mode: Renderer = gl ? "webgl2" : "canvas2d";
     setRenderer(mode);
     let frame = 0, settleTimer = 0, width = 1, height = 1, dpr = 1, movingUntil = 0;
@@ -182,6 +196,8 @@ export function MemoryGraph3D({ source, showTitles, selectedNodeId, onSelectNode
       const rect = canvas.getBoundingClientRect(); width = Math.max(1, rect.width); height = Math.max(1, rect.height);
       dpr = Math.min(window.devicePixelRatio || 1, 2);
       for (const target of [canvas, overlay]) { target.width = Math.round(width * dpr); target.height = Math.round(height * dpr); }
+      // The worker's canvas is sized by the worker.
+      if (offThread) offThread.resize(Math.round(width * dpr), Math.round(height * dpr));
       context?.setTransform(dpr, 0, 0, dpr, 0, 0);
       pickDirty = true; schedule();
     };
@@ -239,20 +255,24 @@ export function MemoryGraph3D({ source, showTitles, selectedNodeId, onSelectNode
       }
     };
     // A lost context falls back to Canvas 2D on the overlay; a restored one switches back to WebGL2.
-    const lost = (event: Event) => { event.preventDefault(); mode = "canvas2d"; setRenderer(mode); pickDirty = true; schedule(); };
+    // (In the render worker the worker sees these events and reports them through `offThread`.)
+    const lost = (event: Event) => { event.preventDefault(); switchTo("canvas2d"); };
     const restored = () => {
       try { gl?.restore(); } catch { gl = null; }
-      uploaded = { graph: null, positions: null };
-      mode = gl ? "webgl2" : "canvas2d"; setRenderer(mode); pickDirty = true; schedule();
+      switchTo(gl ? "webgl2" : "canvas2d");
     };
     benchRef.current = {
       start: (since: number) => {
         void runMemory3DBench({
-          frame: (yaw, pitch, zoom) => { cameraRef.current = { yaw, pitch, zoom }; pickDirty = true; movingUntil = performance.now() + SETTLE_MS; render(); },
+          frame: (yaw, pitch, zoom) => {
+            cameraRef.current = { yaw, pitch, zoom }; pickDirty = true; movingUntil = performance.now() + SETTLE_MS; render();
+            // Drawn in the worker: the frame counts once the worker has drawn it.
+            return offThread && mode === "webgl2" ? offThread.drawn() : undefined;
+          },
           pick: (x, y) => { const started = performance.now(); hit(x, y); return performance.now() - started; },
           size: () => ({ width, height }),
-          info: () => ({ nodes: current.current.graph?.data.count ?? 0, edges: current.current.graph?.data.edgeCount ?? 0, renderer: mode })
-        }, longTasks ?? { entries: [] }, { gpu: gpuName(gl), loadStartedAt: since }).then(result => {
+          info: () => ({ nodes: current.current.graph?.data.count ?? 0, edges: current.current.graph?.data.edgeCount ?? 0, renderer: mode, renderThread: offThread && mode === "webgl2" ? "worker" : "main" })
+        }, longTasks ?? { entries: [] }, { gpu: gl && !gl.lost ? gl.gpu() : null, loadStartedAt: since }).then(result => {
           setBench(result);
           (window as unknown as { __spaceMemory3DBench?: Memory3DBenchResult }).__spaceMemory3DBench = result;
           schedule();
@@ -268,7 +288,7 @@ export function MemoryGraph3D({ source, showTitles, selectedNodeId, onSelectNode
       canvas.removeEventListener("pointerdown", down); canvas.removeEventListener("pointermove", move); canvas.removeEventListener("pointerup", up); canvas.removeEventListener("pointercancel", cancel); canvas.removeEventListener("pointerleave", leave);
       canvas.removeEventListener("wheel", wheel); canvas.removeEventListener("keydown", key);
       canvas.removeEventListener("webglcontextlost", lost); canvas.removeEventListener("webglcontextrestored", restored);
-      gl?.dispose();
+      gl?.dispose(); surface?.remove();
     };
   }, [longTasks]);
   useEffect(() => { redrawRef.current(); }, [graph, layout, showTitles, selectedNodeId, spin]);
@@ -288,11 +308,3 @@ export function MemoryGraph3D({ source, showTitles, selectedNodeId, onSelectNode
     {bench ? <output className="memory-3d-bench" data-memory-3d-bench={JSON.stringify(bench)}>{`${bench.renderer} · ${bench.nodes.toLocaleString()} nodes · p95 ${bench.frameMs.p95} ms · pick p95 ${bench.pickMs.p95} ms · long tasks ${bench.longTasks.load + bench.longTasks.interaction} (max ${Math.max(bench.longTasks.loadMaxMs, bench.longTasks.interactionMaxMs)} ms)`}</output> : null}
   </div>;
 }
-
-function gpuName(renderer: MemoryGraphGL | null): string | null {
-  if (!renderer || renderer.lost) return null;
-  const gl = renderer.gl;
-  const info = gl.getExtension("WEBGL_debug_renderer_info");
-  return info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : String(gl.getParameter(gl.RENDERER));
-}
-
