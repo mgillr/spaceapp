@@ -7253,11 +7253,18 @@ export const memoryGraphPayloadSchema = z.object({
   months: z.array(z.string().max(7)).default([])
 });
 
+/** Nodes in the overview when no `limit` is requested; the 2D map keeps this sample. */
+export const MEMORY_GRAPH_OVERVIEW_DEFAULT_LIMIT = 2000;
+/** Hard server maximum for `limit`, sized for the 3D view. */
+export const MEMORY_GRAPH_OVERVIEW_MAX_LIMIT = 50_000;
+/** The overview keeps three edges per requested node: 6,000 by default, 150,000 at the maximum. */
+export const memoryGraphOverviewEdgeBudget = (limit: number) => limit * 3;
+
 export const memoryGraphOverviewPayloadSchema = memoryGraphPayloadSchema
   .omit({ nodes: true, edges: true })
   .extend({
-    nodes: z.array(memoryGraphNodeSchema).max(2000),
-    edges: z.array(memoryGraphEdgeSchema).max(6000),
+    nodes: z.array(memoryGraphNodeSchema).max(MEMORY_GRAPH_OVERVIEW_MAX_LIMIT),
+    edges: z.array(memoryGraphEdgeSchema).max(memoryGraphOverviewEdgeBudget(MEMORY_GRAPH_OVERVIEW_MAX_LIMIT)),
     totalMatchingNodes: z.number().int().min(0),
     totalMatchingEdges: z.number().int().min(0),
     truncated: z.boolean()
@@ -7288,6 +7295,8 @@ export const listMemoryGraphOverviewQuerySchema = listMemoryGraphQuerySchema.omi
   pageSize: true,
   sortBy: true,
   sortOrder: true
+}).extend({
+  limit: z.coerce.number().int().min(1).max(MEMORY_GRAPH_OVERVIEW_MAX_LIMIT).optional()
 });
 
 export const memoryCalendarQuerySchema = z.object({

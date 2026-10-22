@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import type { ListMemoryQuery, MemoryEntry, MemoryGraphSnapshot } from "@space/contracts";
+import { MEMORY_GRAPH_OVERVIEW_DEFAULT_LIMIT, MEMORY_GRAPH_OVERVIEW_MAX_LIMIT, type ListMemoryQuery, type MemoryEntry, type MemoryGraphSnapshot } from "@space/contracts";
 import { InMemorySpaceStore } from "@space/runtime";
 import { createApp } from "../src/app.js";
 import { createCsrfToken, signSession } from "../src/auth.js";
@@ -158,6 +158,41 @@ function changeSetInput() {
     reason: "Refresh the durable fact.",
     actorUserId: "user:forged"
   };
+}
+
+/** A synthetic snapshot shaped like a long-running archive: about three edges per node. */
+function largeOverviewSnapshot(nodeCount: number): MemoryGraphSnapshot {
+  const graphSnapshot = snapshot() as MemoryGraphSnapshot;
+  // Canonical memory has at most 24 source files; records cluster under them.
+  const sourceCount = Math.min(23, Math.max(1, Math.round(nodeCount / 40))), topicCount = Math.max(2, Math.round(nodeCount / 120));
+  const nodes: MemoryGraphSnapshot["nodes"] = [{ id: "source:root", type: "SOURCE", label: "gemini.md", sourcePath: "/opt/spaceapp/docs/gemini.md", recordId: null }];
+  const edges: MemoryGraphSnapshot["edges"] = [];
+  const pad = (value: number) => String(value).padStart(6, "0");
+  for (let source = 0; source < sourceCount && nodes.length < nodeCount; source++) {
+    nodes.push({ id: `source:${pad(source)}`, type: "SOURCE", label: `notes-${pad(source)}.md`, sourcePath: `/opt/spaceapp/docs/notes-${pad(source)}.md`, recordId: null });
+    edges.push({ id: `edge:derived:${pad(source)}`, type: "DERIVED_FROM", source: "source:root", target: `source:${pad(source)}` });
+  }
+  for (let topic = 0; topic < topicCount && nodes.length < nodeCount; topic++) nodes.push({ id: `topic:${pad(topic)}`, type: "TOPIC", label: `Topic ${topic}`, sourcePath: null, recordId: null });
+  const memoryCount = nodeCount - nodes.length;
+  for (let memory = 0; memory < memoryCount; memory++) {
+    const id = `memory:${pad(memory)}`, source = `source:${pad(memory % sourceCount)}`;
+    nodes.push({ id, type: "MEMORY", label: `Memory ${memory}`, sourcePath: `/opt/spaceapp/docs/notes-${pad(memory % sourceCount)}.md`, recordId: id });
+    edges.push({ id: `edge:contains:${pad(memory)}`, type: "CONTAINS", source, target: id });
+    edges.push({ id: `edge:tag:${pad(memory)}`, type: "TAGGED_WITH", source: id, target: `topic:${pad(memory % topicCount)}`, origin: "EXPLICIT_TAG", confidence: 1, evidence: "Explicit tag in canonical memory." });
+    const related = (memory * 13 + 5) % memoryCount;
+    if (related !== memory) edges.push({ id: `edge:related:${pad(memory)}`, type: "SEMANTICALLY_RELATED", source: id, target: `memory:${pad(related)}`, origin: "EMBEDDING", confidence: 0.8, evidence: "Similar embedding." });
+  }
+  // Top up to three edges per node with a second similarity link.
+  for (let memory = 0; edges.length < nodeCount * 3 && memory < memoryCount; memory++) {
+    const related = (memory * 29 + 11) % memoryCount;
+    if (related !== memory) edges.push({ id: `edge:related2:${pad(memory)}`, type: "SEMANTICALLY_RELATED", source: `memory:${pad(memory)}`, target: `memory:${pad(related)}`, origin: "EMBEDDING", confidence: 0.7, evidence: "Similar embedding." });
+  }
+  graphSnapshot.nodes = nodes;
+  graphSnapshot.edges = edges;
+  graphSnapshot.records = [];
+  graphSnapshot.issues = [];
+  graphSnapshot.summary = { sourceCount: sourceCount + 1, recordCount: memoryCount, nodeCount: nodes.length, edgeCount: edges.length, issueCount: 0 };
+  return graphSnapshot;
 }
 
 describe("Memory graph API", () => {
@@ -433,6 +468,80 @@ describe("Memory graph API", () => {
     expect(data.totalMatchingNodes).toBe(2202);
     await app.close();
   });
+
+  it("serves up to the requested overview limit, keeps the default and rejects limits above the server maximum", async () => {
+    const graphSnapshot = largeOverviewSnapshot(6000);
+    const app = await memoryGraphApp(true, new InMemorySpaceStore(), false, undefined, { graphSnapshot });
+    const byDefault = await app.inject({ method: "GET", url: "/api/admin/memory/graph/overview", headers: { cookie } });
+    expect(byDefault.statusCode).toBe(200);
+    expect(byDefault.json().data.nodes).toHaveLength(MEMORY_GRAPH_OVERVIEW_DEFAULT_LIMIT);
+    expect(byDefault.json().data.edges.length).toBeLessThanOrEqual(6000);
+    expect(byDefault.json().data.truncated).toBe(true);
+
+    const limited = await app.inject({ method: "GET", url: "/api/admin/memory/graph/overview?limit=5000", headers: { cookie } });
+    expect(limited.statusCode).toBe(200);
+    const data = limited.json().data;
+    expect(data.nodes).toHaveLength(5000);
+    expect(data.edges.length).toBeGreaterThan(6000);
+    expect(data.edges.length).toBeLessThanOrEqual(15_000);
+    expect(data.nodes).toContainEqual(expect.objectContaining({ id: "source:root" }));
+    expect(data.totalMatchingNodes).toBe(6000);
+    expect(data.truncated).toBe(true);
+
+    const small = await app.inject({ method: "GET", url: "/api/admin/memory/graph/overview?limit=10", headers: { cookie } });
+    expect(small.statusCode).toBe(200);
+    expect(small.json().data.nodes).toHaveLength(10);
+    expect(small.json().data.edges.length).toBeLessThanOrEqual(30);
+
+    const everything = await app.inject({ method: "GET", url: `/api/admin/memory/graph/overview?limit=${MEMORY_GRAPH_OVERVIEW_MAX_LIMIT}`, headers: { cookie } });
+    expect(everything.statusCode).toBe(200);
+    expect(everything.json().data.nodes).toHaveLength(6000);
+    expect(everything.json().data.truncated).toBe(false);
+
+    for (const limit of [String(MEMORY_GRAPH_OVERVIEW_MAX_LIMIT + 1), "0", "-5", "2.5", "all"]) {
+      const rejected = await app.inject({ method: "GET", url: `/api/admin/memory/graph/overview?limit=${limit}`, headers: { cookie } });
+      expect(rejected.statusCode, `limit=${limit}`).toBe(422);
+    }
+    await app.close();
+  });
+
+  it("keeps the large overview admin-only and its labels redacted", async () => {
+    const graphSnapshot = largeOverviewSnapshot(3000);
+    graphSnapshot.nodes[2999] = { ...graphSnapshot.nodes[2999]!, label: "Deploy note token=raw-large-overview-secret" };
+    const app = await memoryGraphApp(true, new InMemorySpaceStore(), false, undefined, { graphSnapshot });
+    const unauthenticated = await app.inject({ method: "GET", url: "/api/admin/memory/graph/overview?limit=50000" });
+    expect(unauthenticated.statusCode).toBe(401);
+    const userCookie = `space_session=${signSession({ id: "user:member", email: "member@space.test", role: "USER" }, sessionSecret)}`;
+    const member = await app.inject({ method: "GET", url: "/api/admin/memory/graph/overview?limit=50000", headers: { cookie: userCookie } });
+    // Non-operators never see admin routes (the API answers 404 rather than revealing them).
+    expect([403, 404]).toContain(member.statusCode);
+    expect(member.body).not.toContain("memory:");
+    const response = await app.inject({ method: "GET", url: "/api/admin/memory/graph/overview?limit=50000", headers: { cookie } });
+    expect(response.statusCode).toBe(200);
+    const node = response.json().data.nodes.find((candidate: { id: string }) => candidate.id === graphSnapshot.nodes[2999]!.id);
+    expect(node.label).toContain("token:[REDACTED]");
+    expect(response.body).not.toContain("raw-large-overview-secret");
+    await app.close();
+  });
+
+  it("serves 50,000 nodes and 150,000 edges at the maximum limit", async () => {
+    const graphSnapshot = largeOverviewSnapshot(MEMORY_GRAPH_OVERVIEW_MAX_LIMIT);
+    expect(graphSnapshot.edges.length).toBeGreaterThanOrEqual(149_000);
+    const app = await memoryGraphApp(true, new InMemorySpaceStore(), false, undefined, { graphSnapshot });
+    const startedAt = performance.now();
+    const response = await app.inject({ method: "GET", url: `/api/admin/memory/graph/overview?limit=${MEMORY_GRAPH_OVERVIEW_MAX_LIMIT}`, headers: { cookie } });
+    const serverMs = performance.now() - startedAt;
+    expect(response.statusCode).toBe(200);
+    const data = response.json().data;
+    expect(data.nodes).toHaveLength(MEMORY_GRAPH_OVERVIEW_MAX_LIMIT);
+    expect(data.edges).toHaveLength(graphSnapshot.edges.length);
+    expect(data.truncated).toBe(false);
+    // Reported in the pull request; not asserted, so a slow runner cannot fail the suite.
+    if (process.env.MEMORY_GRAPH_OVERVIEW_REPORT) {
+      console.info(`[memory-graph-overview] nodes=${data.nodes.length} edges=${data.edges.length} bytes=${Buffer.byteLength(response.body)} serverMs=${serverMs.toFixed(0)}`);
+    }
+    await app.close();
+  }, 60_000);
 
   it("serves the all-months archive and single-month filtering through the month query param", async () => {
     const graphSnapshot = snapshot() as MemoryGraphSnapshot;
