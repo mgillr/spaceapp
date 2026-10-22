@@ -72,6 +72,8 @@ SpaceApp features an integrated PostgreSQL `pgvector` database that indexes file
 
 *Above: 3D visualization of the persistent vector memory graph linking multi-session context, file relationships, and cross-agent discoveries.*
 
+The 3D view draws with WebGL2 (instanced nodes, batched edges, depth on the GPU) and can load up to 50,000 nodes and 150,000 edges from the overview endpoint (`limit` query parameter; the default stays 2,000). Layout runs in a Web Worker and streams positions while it converges. Without WebGL2, or after a lost WebGL context, it falls back to the Canvas 2D renderer with the 2,000-node sample. To try a large graph without a backend, open `/demo-workspace?memoryGraphNodes=50000`, then Memory, Atlas and 3D.
+
 ### 5. Conversational Room Agent & Gemini Live Voice
 Coordinate multi-step tasks conversationally through the Room Agent or speak naturally to your workspace using full-duplex Gemini Live voice streaming:
 

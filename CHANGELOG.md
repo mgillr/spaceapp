@@ -5,6 +5,25 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Memory workspace
+
+- The 3D memory graph renders with WebGL2: instanced nodes, one batched edge
+  draw and GPU depth instead of a per-frame CPU sort. Hover and click use a
+  screen-space grid index, and labels use level-of-detail with a fixed
+  per-frame budget. Without WebGL2, or after a lost context, the view falls
+  back to Canvas 2D with the 2,000-node sample and switches back when the
+  context is restored.
+- The 3D layout runs incrementally in the Web Worker and streams positions
+  while it converges; for the same graph it is deterministic and, up to 2,000
+  nodes, identical to the previous layout.
+- `GET /api/admin/memory/graph/overview` accepts `limit` (1 to 50,000; the
+  default stays 2,000, edges are capped at three per node). The 3D view
+  requests the full archive up to that maximum.
+- The demo workspace can generate a synthetic memory graph of a given size
+  (`/demo-workspace?memoryGraphNodes=50000`), and `memory3dBench=1` runs an
+  in-page frame-time harness (`apps/web/scripts/memory-3d-bench.mjs` drives
+  it in headless Chrome).
+
 ## [1.1.7] - 2026-10-21
 
 Source: sanitized Space app @ 7619ef9523 (4729 files: SpaceApp 77d00f6895 with
