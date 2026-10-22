@@ -4,9 +4,20 @@ import { memoryGLGraph, type MemoryGLGraph, type MemoryGraphRenderer } from "./m
 
 type RenderWorker = Pick<Worker, "postMessage" | "terminate"> & { onmessage: ((event: MessageEvent<MemoryRenderEvent>) => void) | null; onerror: ((event: ErrorEvent) => void) | null };
 
-/** Whether this browser can hand a canvas to a worker (OffscreenCanvas with transferControlToOffscreen). */
-export const canRenderInWorker = (canvas: HTMLCanvasElement) =>
-  typeof Worker !== "undefined" && typeof OffscreenCanvas !== "undefined" && typeof canvas.transferControlToOffscreen === "function";
+/**
+ * Whether this browser can hand a canvas to a worker (OffscreenCanvas with transferControlToOffscreen)
+ * and the page itself may use WebGL2. Some browsers still give a worker WebGL when it is turned off
+ * for pages, so the page's own answer decides, and the throwaway context is released at once.
+ */
+export const canRenderInWorker = (canvas: HTMLCanvasElement) => {
+  if (typeof Worker === "undefined" || typeof OffscreenCanvas === "undefined" || typeof canvas.transferControlToOffscreen !== "function") return false;
+  try {
+    const probe = canvas.ownerDocument.createElement("canvas").getContext("webgl2");
+    if (!probe) return false;
+    probe.getExtension("WEBGL_lose_context")?.loseContext();
+    return true;
+  } catch { return false; }
+};
 
 /**
  * The WebGL2 renderer running in `memory-3d-render.worker.ts`. The page keeps the camera, picking,

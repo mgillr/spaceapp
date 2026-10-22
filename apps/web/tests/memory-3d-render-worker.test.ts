@@ -76,11 +76,13 @@ describe("memory graph render worker client", () => {
     const offscreen = fakeOffscreen();
     const canvas = document.createElement("canvas");
     Object.assign(canvas, { transferControlToOffscreen: () => offscreen });
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(((kind: string) => kind === "webgl2" ? { getExtension: () => null } : null) as HTMLCanvasElement["getContext"]);
     const events = { ready: vi.fn(), lost: vi.fn(), restored: vi.fn() };
     vi.stubGlobal("OffscreenCanvas", class {});
     vi.stubGlobal("Worker", class {});
     const client = MemoryGraphGLWorker.create(canvas, events, () => worker)!;
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     const reply = (data: MemoryRenderEvent) => worker.onmessage({ data } as MessageEvent<MemoryRenderEvent>);
     return { client, posted, offscreen, events, reply, worker };
   }
@@ -120,6 +122,19 @@ describe("memory graph render worker client", () => {
 
   it("is not used where a canvas cannot be transferred", () => {
     expect(MemoryGraphGLWorker.create(document.createElement("canvas"), { ready: vi.fn(), lost: vi.fn(), restored: vi.fn() })).toBeNull();
+  });
+
+  it("is not used when the page has no WebGL2, even if a worker might", () => {
+    const canvas = document.createElement("canvas");
+    Object.assign(canvas, { transferControlToOffscreen: () => fakeOffscreen() });
+    vi.stubGlobal("OffscreenCanvas", class {});
+    vi.stubGlobal("Worker", class {});
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation((() => null) as HTMLCanvasElement["getContext"]);
+    const createWorker = vi.fn();
+    expect(MemoryGraphGLWorker.create(canvas, { ready: vi.fn(), lost: vi.fn(), restored: vi.fn() }, createWorker)).toBeNull();
+    expect(createWorker).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 });
 
