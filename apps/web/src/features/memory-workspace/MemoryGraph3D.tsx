@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_MEMORY_CAMERA, MEMORY_NODE_ROOT, memoryGraphScale, memoryNodeRadius, memoryProjection, projectMemoryPointInto, type MemoryCamera3D, type MemoryProjection } from "./memory-3d.js";
 import { MEMORY_3D_BENCH_PARAM, observeLongTasks, runMemory3DBench, type Memory3DBenchResult } from "./memory-3d-bench.js";
 import { MEMORY_3D_LABEL_CANDIDATES, MEMORY_3D_RECORD_LABEL_ZOOM, selectMemoryLabels } from "./memory-3d-labels.js";
-import { MemoryPickIndex } from "./memory-3d-picking.js";
+import { MemoryPickIndex, MemoryRayPickIndex } from "./memory-3d-picking.js";
 import { canRenderInWorker, MemoryGraphGLWorker } from "./memory-3d-render-client.js";
 import { MemoryGraphGL, type MemoryGraphRenderer } from "./memory-3d-webgl.js";
 import { memoryFocusState, type MemoryGraph3DData } from "./memory-graph-3d-data.js";
@@ -88,8 +88,12 @@ export function MemoryGraph3D({ source, showTitles, selectedNodeId, onSelectNode
     let hover = -1, focus = -1;
     let uploaded: { graph: MemoryGraph3DData | null; positions: Float32Array | null } = { graph: null, positions: null };
     const state = { array: new Uint8Array(0) };
+    // Labels use the screen index (rebuilt when the camera stops); hover and click use the
+    // world-space index, which a rotating camera does not invalidate.
     const pickIndex = new MemoryPickIndex();
     let pickDirty = true, nearby: Int32Array | null = null;
+    const rayIndex = new MemoryRayPickIndex();
+    let rayKey: { data: MemoryGraph3DData | null; positions: Float32Array | null; subset: ArrayLike<number> | null } = { data: null, positions: null, subset: null };
     const pointers = new Map<number, { x: number; y: number }>();
     let dragged = false, downX = 0, downY = 0;
     const widths = new Map<string, number>();
@@ -202,9 +206,14 @@ export function MemoryGraph3D({ source, showTitles, selectedNodeId, onSelectNode
       pickDirty = true; schedule();
     };
     const hit = (x: number, y: number) => {
-      const { graph } = current.current;
-      if (!graph || !ensurePickIndex()) return -1;
-      return pickIndex.pick(x, y);
+      const { graph, layout } = current.current;
+      if (!graph || !layout) return -1;
+      const nodes = subset();
+      if (rayKey.data !== graph.data || rayKey.positions !== layout.positions || rayKey.subset !== nodes) {
+        rayIndex.rebuild(layout.positions, 4, graph.data.count, nodes);
+        rayKey = { data: graph.data, positions: layout.positions, subset: nodes };
+      }
+      return rayIndex.pick(view(), graph.data.kinds, x, y, focus);
     };
     const idOf = (i: number) => i >= 0 ? current.current.graph?.data.ids[i] ?? null : null;
     const local = (event: PointerEvent) => { const rect = canvas.getBoundingClientRect(); return { x: event.clientX - rect.left, y: event.clientY - rect.top }; };

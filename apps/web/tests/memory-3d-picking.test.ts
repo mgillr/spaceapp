@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MEMORY_NODE_OTHER, MEMORY_NODE_ROOT, MEMORY_NODE_SOURCE, memoryNodeRadius, memoryProjection, projectMemoryPointInto, type MemoryProjection } from "../src/features/memory-workspace/memory-3d.js";
-import { MemoryPickIndex } from "../src/features/memory-workspace/memory-3d-picking.js";
+import { MemoryPickIndex, MemoryRayPickIndex } from "../src/features/memory-workspace/memory-3d-picking.js";
 
 function randomGraph(count: number, seed = 7) {
   let state = seed;
@@ -73,5 +73,47 @@ describe("3D picking index", () => {
       expect(picked).toBe(linearPick(positions, kinds, 5000, view, x, y, -1, subset));
       if (picked >= 0) expect(picked % 2).toBe(0);
     }
+  });
+
+  it("the world-space ray index returns the same node as a linear scan, without re-indexing when the camera moves", () => {
+    const count = 50_000;
+    const { positions, kinds, random } = randomGraph(count, 11);
+    const index = new MemoryRayPickIndex();
+    index.rebuild(positions, 4, count);
+    let hits = 0, maxCandidates = 0, totalCandidates = 0, picks = 0;
+    // Includes the zoom limits (0.35x and 5x) and a scale where the nearest nodes reach the perspective clamp.
+    const cameras = [
+      { camera: { yaw: 0.3, pitch: -0.15, zoom: 1 }, scale: 0.35 }, { camera: { yaw: 2.4, pitch: 0.9, zoom: 3.5 }, scale: 0.35 },
+      { camera: { yaw: -1, pitch: 0.2, zoom: 0.35 }, scale: 0.35 }, { camera: { yaw: 4, pitch: -1.2, zoom: 5 }, scale: 0.35 },
+      { camera: { yaw: 1.1, pitch: 0.4, zoom: 0.6 }, scale: 1.5 }
+    ];
+    for (const { camera, scale } of cameras) {
+      const view = memoryProjection(camera, scale, 1280, 800);
+      for (let k = 0; k < 120; k++) {
+        const x = random() * 1280, y = random() * 800, focus = k % 3 === 0 ? 17 : -1;
+        const expected = linearPick(positions, kinds, count, view, x, y, focus);
+        expect(index.pick(view, kinds, x, y, focus)).toBe(expected);
+        if (expected >= 0) hits++;
+        maxCandidates = Math.max(maxCandidates, index.lastCandidates);
+        totalCandidates += index.lastCandidates; picks++;
+      }
+    }
+    expect(hits).toBeGreaterThan(100);
+    expect(maxCandidates).toBeLessThan(count / 5);
+    expect(totalCandidates / picks).toBeLessThan(count / 20);
+  });
+
+  it("the world-space ray index picks the frontmost node, nothing on empty space, and respects a subset", () => {
+    const positions = new Float32Array([0, 0, 50, 1, 0, 0, -50, 1, 400, 400, 0, 1]);
+    const kinds = new Uint8Array([MEMORY_NODE_OTHER, MEMORY_NODE_OTHER, MEMORY_NODE_SOURCE]);
+    const index = new MemoryRayPickIndex();
+    const view = memoryProjection({ yaw: 0, pitch: 0, zoom: 1 }, 1, 800, 600);
+    index.rebuild(positions, 4, 3);
+    expect(index.pick(view, kinds, 400, 300)).toBe(1);
+    expect(index.pick(view, kinds, 10, 10)).toBe(-1);
+    index.rebuild(positions, 4, 3, [0, 2]);
+    expect(index.pick(view, kinds, 400, 300)).toBe(0);
+    index.rebuild(positions, 4, 3, []);
+    expect(index.pick(view, kinds, 400, 300)).toBe(-1);
   });
 });
