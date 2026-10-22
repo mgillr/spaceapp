@@ -150,6 +150,7 @@ test('Dockerfile keeps every protected value while the closures land', () => {
   assert.ok(df.includes('EXPOSE 4911'), 'EXPOSE 4911 kept');
   assert.ok(df.includes('@opencode/cli@2.0.32'), 'OpenCode 2.0.32 kept');
   assert.ok(df.includes('chromium') && df.includes('fonts-liberation'), 'chromium stack kept');
+  assert.ok(/chromium fonts-liberation liblzma5 xvfb/.test(df), 'the browser image carries Xvfb for the default headed browser sessions');
   assert.ok(df.includes('/staging/browser/node_modules/@temporalio'), 'browser strips the temporal stack after install');
   assert.ok(df.match(/install-workspaces\.txt/g)?.length >= 2, 'core and browser install only their install workspaces');
   assert.ok(df.includes('python3-minimal'), 'python3-minimal kept');

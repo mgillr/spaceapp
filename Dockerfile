@@ -112,9 +112,11 @@ ENTRYPOINT ["/app/deploy/docker/core-entrypoint.sh"]
 
 FROM runtime-base AS browser
 COPY --from=build --chown=spaceapp:spaceapp /staging/browser/ ./
+# Xvfb: managed browser sessions run headed by default (the API spawns /usr/bin/Xvfb) and the launcher's profiles
+# keep that default, so a browser pane cannot open a page without the X server in this image.
 RUN node deploy/docker/stage-target.mjs --verify --target browser --repo-root /app \
     && apt-get update \
-    && apt-get install -y --no-install-recommends chromium fonts-liberation liblzma5 \
+    && apt-get install -y --no-install-recommends chromium fonts-liberation liblzma5 xvfb \
     && rm -rf /var/lib/apt/lists/* \
     && install -d -o spaceapp -g spaceapp -m 0700 \
       /var/lib/spaceapp \
